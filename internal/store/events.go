@@ -72,6 +72,76 @@ func insertEvents(ctx context.Context, tx pgx.Tx, network string, events []Event
 	return nil
 }
 
+// EventQuery selects events for the public API. Zero values widen: nil
+// topics are wildcards, ToLedger 0 is unbounded, AfterID empty starts at
+// the beginning.
+type EventQuery struct {
+	ContractID string
+	// Topics filter by exact base64 ScVal per position (getEvents v2
+	// semantics: AND across positions, omitted = wildcard).
+	Topics     [4]*string
+	FromLedger uint32
+	ToLedger   uint32
+	AfterID    string
+	Limit      int
+}
+
+// QueryEvents returns up to Limit events in chain order (id ascending) and
+// whether more rows match beyond the page.
+func (s *Store) QueryEvents(ctx context.Context, network string, q EventQuery) ([]Event, bool, error) {
+	sql := `
+		SELECT id, contract_id, ledger_sequence, closed_at, tx_hash,
+		       tx_index, op_index, event_index, COALESCE(event_name, ''),
+		       topics, value_xdr, raw_xdr
+		FROM events
+		WHERE network = $1 AND contract_id = $2 AND ledger_sequence >= $3`
+	args := []any{network, q.ContractID, int64(q.FromLedger)}
+	if q.ToLedger > 0 {
+		args = append(args, int64(q.ToLedger))
+		sql += fmt.Sprintf(" AND ledger_sequence <= $%d", len(args))
+	}
+	if q.AfterID != "" {
+		args = append(args, q.AfterID)
+		sql += fmt.Sprintf(" AND id > $%d", len(args))
+	}
+	for i, topic := range q.Topics {
+		if topic != nil {
+			args = append(args, *topic)
+			sql += fmt.Sprintf(" AND topic%d = $%d", i, len(args))
+		}
+	}
+	// One extra row answers has-more without a second query.
+	args = append(args, q.Limit+1)
+	sql += fmt.Sprintf(" ORDER BY id LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("store: query events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var seq int64
+		if err := rows.Scan(&e.ID, &e.ContractID, &seq, &e.ClosedAt, &e.TxHash,
+			&e.TxIndex, &e.OpIndex, &e.EventIndex, &e.EventName,
+			&e.Topics, &e.ValueXDR, &e.RawXDR); err != nil {
+			return nil, false, fmt.Errorf("store: scan event: %w", err)
+		}
+		e.LedgerSequence = uint32(seq)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("store: query events: %w", err)
+	}
+	hasMore := len(out) > q.Limit
+	if hasMore {
+		out = out[:q.Limit]
+	}
+	return out, hasMore, nil
+}
+
 // EventCountsByName aggregates stored events per event name for one
 // contract; unnamed events group under the empty string.
 func (s *Store) EventCountsByName(ctx context.Context, network, contractID string) (map[string]int64, error) {
