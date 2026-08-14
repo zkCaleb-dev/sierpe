@@ -14,6 +14,7 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 
+	"github.com/zkCaleb-dev/sierpe/internal/registry"
 	"github.com/zkCaleb-dev/sierpe/internal/source"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
@@ -83,7 +84,7 @@ func (s *fakeStore) LoadCursor(context.Context, string) (store.Cursor, error) {
 	return *s.cursor, nil
 }
 
-func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord) error {
+func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.committed = append(s.committed, rec)
@@ -108,11 +109,23 @@ type nopInstruments struct{}
 func (nopInstruments) IncLedgersIngested()         {}
 func (nopInstruments) SetTipLag(time.Duration)     {}
 func (nopInstruments) ObserveCommit(time.Duration) {}
+func (nopInstruments) IncEventsExtracted(int)      {}
+func (nopInstruments) IncFailedTxs(int)            {}
+func (nopInstruments) IncSuppressedTxs(int)        {}
+func (nopInstruments) IncSuppressedEvents(int)     {}
+
+// emptyLister backs a registry that watches nothing; extraction over the
+// fake chain ledgers (which carry no transactions) stays a no-op.
+type emptyLister struct{}
+
+func (emptyLister) ListContracts(context.Context, string) ([]store.Contract, error) {
+	return nil, nil
+}
 
 func newTestLoop(src ledgerSource, st cursorStore, startLedger uint32) *Loop {
 	return New(
 		Config{Network: "testnet", Passphrase: "test-pass", StartLedger: startLedger},
-		src, st, nopObserver{}, nopInstruments{},
+		src, st, registry.New("testnet", emptyLister{}), nopObserver{}, nopInstruments{},
 		slog.New(slog.NewTextHandler(discard{}, nil)),
 	)
 }
