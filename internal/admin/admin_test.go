@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zkCaleb-dev/sierpe/internal/registry"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
 
@@ -54,10 +55,28 @@ func (f *fakeReloader) Reload(context.Context) error {
 	return f.err
 }
 
-func newTestServer(st *fakeStore, reg *fakeReloader) *httptest.Server {
+// fakeClassifier returns a canned classification (or error).
+type fakeClassifier struct {
+	cls   registry.Classification
+	err   error
+	calls int
+}
+
+func (f *fakeClassifier) Classify(context.Context, string) (registry.Classification, error) {
+	f.calls++
+	return f.cls, f.err
+}
+
+func okClassifier() *fakeClassifier {
+	return &fakeClassifier{cls: registry.Classification{
+		Type: registry.TypeWasm, Events: []string{"transfer"}, Method: registry.MethodSpecEvents,
+	}}
+}
+
+func newTestServer(st *fakeStore, reg *fakeReloader, cls *fakeClassifier) *httptest.Server {
 	mux := http.NewServeMux()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	NewServer("testnet", testToken, st, reg, log).Register(mux)
+	NewServer("testnet", testToken, st, reg, cls, log).Register(mux)
 	return httptest.NewServer(mux)
 }
 
@@ -84,7 +103,7 @@ func doRequest(t *testing.T, method, url, token, body string) *http.Response {
 
 func TestAuthRejectsBadCredentials(t *testing.T) {
 	st := &fakeStore{}
-	srv := newTestServer(st, &fakeReloader{})
+	srv := newTestServer(st, &fakeReloader{}, okClassifier())
 	defer srv.Close()
 
 	cases := []struct {
@@ -112,7 +131,7 @@ func TestAuthRejectsBadCredentials(t *testing.T) {
 func TestRegisterContract(t *testing.T) {
 	st := &fakeStore{}
 	reg := &fakeReloader{}
-	srv := newTestServer(st, reg)
+	srv := newTestServer(st, reg, okClassifier())
 	defer srv.Close()
 
 	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
@@ -141,7 +160,7 @@ func TestRegisterContract(t *testing.T) {
 
 func TestRegisterValidation(t *testing.T) {
 	st := &fakeStore{}
-	srv := newTestServer(st, &fakeReloader{})
+	srv := newTestServer(st, &fakeReloader{}, okClassifier())
 	defer srv.Close()
 
 	cases := []struct {
@@ -170,7 +189,7 @@ func TestRegisterValidation(t *testing.T) {
 func TestRegisterStoreErrorIs500(t *testing.T) {
 	st := &fakeStore{upsertErr: errors.New("db down")}
 	reg := &fakeReloader{}
-	srv := newTestServer(st, reg)
+	srv := newTestServer(st, reg, okClassifier())
 	defer srv.Close()
 
 	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
@@ -186,7 +205,7 @@ func TestRegisterStoreErrorIs500(t *testing.T) {
 func TestRegisterSucceedsWhenReloadFails(t *testing.T) {
 	st := &fakeStore{}
 	reg := &fakeReloader{err: errors.New("transient")}
-	srv := newTestServer(st, reg)
+	srv := newTestServer(st, reg, okClassifier())
 	defer srv.Close()
 
 	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
@@ -200,7 +219,7 @@ func TestDeleteContractIsIdempotent(t *testing.T) {
 	for _, existed := range []bool{true, false} {
 		st := &fakeStore{deleteExisted: existed}
 		reg := &fakeReloader{}
-		srv := newTestServer(st, reg)
+		srv := newTestServer(st, reg, okClassifier())
 
 		resp := doRequest(t, http.MethodDelete, srv.URL+"/v1/contracts/"+validContract, testToken, "")
 		if resp.StatusCode != http.StatusNoContent {
@@ -216,9 +235,67 @@ func TestDeleteContractIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRegisterStoresClassification(t *testing.T) {
+	st := &fakeStore{}
+	cls := okClassifier()
+	srv := newTestServer(st, &fakeReloader{}, cls)
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if cls.calls != 1 {
+		t.Errorf("classifier calls = %d, want 1", cls.calls)
+	}
+	stored := string(st.upserted[0].Classification)
+	for _, fragment := range []string{`"type":"wasm"`, `"transfer"`, `"method":"spec_events"`} {
+		if !strings.Contains(stored, fragment) {
+			t.Errorf("stored classification %s must contain %s", stored, fragment)
+		}
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"type":"wasm"`) {
+		t.Errorf("response must echo the classification, got %s", body)
+	}
+}
+
+func TestRegisterUnknownContractIs404(t *testing.T) {
+	st := &fakeStore{}
+	cls := &fakeClassifier{err: registry.ErrContractNotFound}
+	srv := newTestServer(st, &fakeReloader{}, cls)
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`"}`)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+	if len(st.upserted) != 0 {
+		t.Error("a contract missing on chain must not be registered")
+	}
+}
+
+func TestRegisterChainUnreachableIs502(t *testing.T) {
+	st := &fakeStore{}
+	cls := &fakeClassifier{err: errors.New("all rpc endpoints failed")}
+	srv := newTestServer(st, &fakeReloader{}, cls)
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`"}`)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	if len(st.upserted) != 0 {
+		t.Error("an unclassifiable contract must not be silently registered")
+	}
+}
+
 func TestDeleteRejectsInvalidID(t *testing.T) {
 	st := &fakeStore{}
-	srv := newTestServer(st, &fakeReloader{})
+	srv := newTestServer(st, &fakeReloader{}, okClassifier())
 	defer srv.Close()
 
 	resp := doRequest(t, http.MethodDelete, srv.URL+"/v1/contracts/not-a-contract", testToken, "")

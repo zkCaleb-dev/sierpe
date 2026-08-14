@@ -92,11 +92,26 @@ func run(log *slog.Logger, withIngestion bool) error {
 		return err
 	}
 
+	// Both modes need the RPC pool: ingestion pulls ledgers from it and the
+	// admin API classifies contracts through it.
+	src, err := rpc.New(cfg.RPCURLs)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	if !withIngestion {
+		// The ingestion loop verifies the network itself; serve mode must
+		// not classify against the wrong chain either.
+		if err := src.VerifyNetwork(ctx, cfg.Network.Passphrase()); err != nil {
+			return err
+		}
+	}
+
 	metrics := health.NewMetrics()
 	state := &health.State{}
 	mux := http.NewServeMux()
 	health.NewServer(version, string(cfg.Network), state, metrics).Register(mux)
-	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, reg, log).Register(mux)
+	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, reg, registry.NewClassifier(src), log).Register(mux)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
@@ -132,11 +147,6 @@ func run(log *slog.Logger, withIngestion bool) error {
 		}
 	}
 
-	src, err := rpc.New(cfg.RPCURLs)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
 	go feedFailovers(ctx, src, state, metrics)
 
 	loop := ingest.New(

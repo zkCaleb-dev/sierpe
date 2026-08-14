@@ -130,6 +130,25 @@ func (c *Client) GetLedger(ctx context.Context, seq uint32) (xdr.LedgerCloseMeta
 	return lcm, nil
 }
 
+// GetLedgerEntry fetches one current ledger entry by its base64 XDR key.
+// found=false means the entry does not exist on chain — which is an answer,
+// not an error (the caller decides what absence means).
+func (c *Client) GetLedgerEntry(ctx context.Context, keyB64 string) (string, bool, error) {
+	params := map[string]any{"keys": []string{keyB64}}
+	var res struct {
+		Entries []struct {
+			Xdr string `json:"xdr"`
+		} `json:"entries"`
+	}
+	if err := c.call(ctx, "getLedgerEntries", params, &res); err != nil {
+		return "", false, fmt.Errorf("getLedgerEntries: %w", err)
+	}
+	if len(res.Entries) == 0 {
+		return "", false, nil
+	}
+	return res.Entries[0].Xdr, true, nil
+}
+
 // --- JSON-RPC plumbing ---
 
 type jsonRPCError struct {

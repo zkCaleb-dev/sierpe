@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/strkey"
 
+	"github.com/zkCaleb-dev/sierpe/internal/registry"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
 
@@ -38,18 +40,24 @@ type reloader interface {
 	Reload(ctx context.Context) error
 }
 
+// classifier resolves a contract id to its on-chain classification.
+type classifier interface {
+	Classify(ctx context.Context, contractID string) (registry.Classification, error)
+}
+
 // Server holds the admin API dependencies.
 type Server struct {
-	network  string
-	token    string
-	store    contractStore
-	registry reloader
-	log      *slog.Logger
+	network    string
+	token      string
+	store      contractStore
+	registry   reloader
+	classifier classifier
+	log        *slog.Logger
 }
 
 // NewServer wires the admin API. All collaborators are required.
-func NewServer(network, token string, st contractStore, reg reloader, log *slog.Logger) *Server {
-	return &Server{network: network, token: token, store: st, registry: reg, log: log}
+func NewServer(network, token string, st contractStore, reg reloader, cls classifier, log *slog.Logger) *Server {
+	return &Server{network: network, token: token, store: st, registry: reg, classifier: cls, log: log}
 }
 
 // Register mounts the admin routes onto mux.
@@ -134,11 +142,34 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Classification happens before the row exists: a contract that is not
+	// on chain is a caller mistake, not a registration (D1 — kinds default
+	// follows what the chain says the contract is).
+	cls, err := s.classifier.Classify(r.Context(), req.ContractID)
+	switch {
+	case errors.Is(err, registry.ErrContractNotFound):
+		writeError(w, http.StatusNotFound,
+			fmt.Sprintf("contract %s does not exist on %s", req.ContractID, s.network))
+		return
+	case err != nil:
+		s.log.Error("classification failed", "contract_id", req.ContractID, "err", err)
+		writeError(w, http.StatusBadGateway,
+			"could not read the contract from the chain; retry when the RPC is reachable")
+		return
+	}
+	clsJSON, err := json.Marshal(cls)
+	if err != nil {
+		s.log.Error("classification marshal failed", "contract_id", req.ContractID, "err", err)
+		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
+		return
+	}
+
 	saved, err := s.store.UpsertContract(r.Context(), store.Contract{
-		Network:    s.network,
-		ContractID: req.ContractID,
-		Source:     store.SourceAPI,
-		Kinds:      kinds,
+		Network:        s.network,
+		ContractID:     req.ContractID,
+		Source:         store.SourceAPI,
+		Kinds:          kinds,
+		Classification: clsJSON,
 	})
 	if err != nil {
 		s.log.Error("contract registration failed", "contract_id", req.ContractID, "err", err)
@@ -146,7 +177,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reloadRegistry(r.Context())
-	s.log.Info("contract registered", "contract_id", saved.ContractID, "kinds", saved.Kinds)
+	s.log.Info("contract registered", "contract_id", saved.ContractID,
+		"kinds", saved.Kinds, "type", cls.Type, "method", cls.Method, "events", len(cls.Events))
 	writeJSON(w, http.StatusOK, toResponse(saved))
 }
 
