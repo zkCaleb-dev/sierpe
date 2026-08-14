@@ -84,7 +84,7 @@ func (s *fakeStore) LoadCursor(context.Context, string) (store.Cursor, error) {
 	return *s.cursor, nil
 }
 
-func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event) error {
+func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.committed = append(s.committed, rec)
@@ -106,13 +106,14 @@ func (nopObserver) Observe(uint32, uint32, time.Duration) {}
 
 type nopInstruments struct{}
 
-func (nopInstruments) IncLedgersIngested()         {}
-func (nopInstruments) SetTipLag(time.Duration)     {}
-func (nopInstruments) ObserveCommit(time.Duration) {}
-func (nopInstruments) IncEventsExtracted(int)      {}
-func (nopInstruments) IncFailedTxs(int)            {}
-func (nopInstruments) IncSuppressedTxs(int)        {}
-func (nopInstruments) IncSuppressedEvents(int)     {}
+func (nopInstruments) IncLedgersIngested()          {}
+func (nopInstruments) SetTipLag(time.Duration)      {}
+func (nopInstruments) ObserveCommit(time.Duration)  {}
+func (nopInstruments) IncEventsExtracted(int)       {}
+func (nopInstruments) IncStateChangesExtracted(int) {}
+func (nopInstruments) IncFailedTxs(int)             {}
+func (nopInstruments) IncSuppressedTxs(int)         {}
+func (nopInstruments) IncSuppressedEvents(int)      {}
 
 // emptyLister backs a registry that watches nothing; extraction over the
 // fake chain ledgers (which carry no transactions) stays a no-op.

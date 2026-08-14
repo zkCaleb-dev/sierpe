@@ -146,12 +146,18 @@ type LedgerRecord struct {
 }
 
 // CommitLedger atomically advances the cursor, records chain continuity, and
-// persists the ledger's extracted events. This is THE transaction (CLAUDE.md
-// rule 1): either the ledger fully happened — cursor, continuity, data — or
-// it never did.
-func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerRecord, events []Event) error {
+// persists the ledger's extracted events and state changes. This is THE
+// transaction (CLAUDE.md rule 1): either the ledger fully happened —
+// cursor, continuity, data — or it never did.
+func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerRecord, events []Event, states []StateChange) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := insertEvents(ctx, tx, network, events); err != nil {
+			return err
+		}
+		if err := insertStateChanges(ctx, tx, network, states); err != nil {
+			return err
+		}
+		if err := applyStateEntries(ctx, tx, network, states); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `

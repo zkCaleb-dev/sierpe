@@ -170,12 +170,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	kinds := req.Kinds
 	if len(kinds) == 0 {
-		kinds = []string{store.KindEvents}
+		// D1 default: derive everything v1 knows how to derive.
+		kinds = []string{store.KindEvents, store.KindState}
 	}
 	for _, k := range kinds {
-		if k != store.KindEvents {
+		if k != store.KindEvents && k != store.KindState {
 			writeError(w, http.StatusBadRequest,
-				fmt.Sprintf("kind %q is not supported (supported: %s)", k, store.KindEvents))
+				fmt.Sprintf("kind %q is not supported (supported: %s, %s)", k, store.KindEvents, store.KindState))
 			return
 		}
 	}
