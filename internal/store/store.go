@@ -137,8 +137,7 @@ func (s *Store) LoadCursor(ctx context.Context, network string) (Cursor, error) 
 	return c, nil
 }
 
-// LedgerRecord is what CommitLedger persists per ledger in M0. From M1 on it
-// grows a Batch of extracted records committed in the same transaction.
+// LedgerRecord is the per-ledger continuity record CommitLedger persists.
 type LedgerRecord struct {
 	Sequence     uint32
 	Hash         string
@@ -146,10 +145,15 @@ type LedgerRecord struct {
 	ClosedAt     time.Time
 }
 
-// CommitLedger atomically advances the cursor and records chain continuity.
-// This is THE transaction: when extraction lands (M1), its writes join here.
-func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerRecord) error {
+// CommitLedger atomically advances the cursor, records chain continuity, and
+// persists the ledger's extracted events. This is THE transaction (CLAUDE.md
+// rule 1): either the ledger fully happened — cursor, continuity, data — or
+// it never did.
+func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerRecord, events []Event) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := insertEvents(ctx, tx, network, events); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO cursor (network, last_sequence, last_hash, updated_at)
 			VALUES ($1, $2, $3, now())

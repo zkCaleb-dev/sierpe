@@ -18,13 +18,18 @@ import (
 )
 
 // Metrics is Sierpe's Prometheus instrument set. One instance per process.
+// Every metric is documented in docs/METRICS.md; keep both in sync.
 type Metrics struct {
-	LedgersIngested prometheus.Counter
-	TipLagSeconds   prometheus.Gauge
-	SourceFailovers prometheus.Counter
-	CommitSeconds   prometheus.Histogram
-	OpenGaps        prometheus.Gauge
-	registry        *prometheus.Registry
+	LedgersIngested  prometheus.Counter
+	TipLagSeconds    prometheus.Gauge
+	SourceFailovers  prometheus.Counter
+	CommitSeconds    prometheus.Histogram
+	OpenGaps         prometheus.Gauge
+	EventsExtracted  prometheus.Counter
+	FailedTxs        prometheus.Counter
+	SuppressedTxs    prometheus.Counter
+	SuppressedEvents prometheus.Counter
+	registry         *prometheus.Registry
 }
 
 // NewMetrics builds and registers the instrument set on a private registry
@@ -54,6 +59,22 @@ func NewMetrics() *Metrics {
 			Name: "sierpe_open_gaps",
 			Help: "Unresolved coverage gaps recorded in the database.",
 		}),
+		EventsExtracted: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_events_extracted_total",
+			Help: "Events from watched contracts committed to the store.",
+		}),
+		FailedTxs: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_failed_txs_skipped_total",
+			Help: "Failed transactions skipped during extraction (their events never happened). Routine.",
+		}),
+		SuppressedTxs: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_suppressed_txs_total",
+			Help: "Transactions dropped because their meta was unreadable or panicked mid-decode. Alert if nonzero.",
+		}),
+		SuppressedEvents: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_suppressed_events_total",
+			Help: "Events dropped because their XDR could not be re-encoded. Alert if nonzero.",
+		}),
 		registry: reg,
 	}
 }
@@ -69,6 +90,18 @@ func (m *Metrics) SetTipLag(d time.Duration) { m.TipLagSeconds.Set(d.Seconds()) 
 
 // ObserveCommit records one ledger-commit duration.
 func (m *Metrics) ObserveCommit(d time.Duration) { m.CommitSeconds.Observe(d.Seconds()) }
+
+// IncEventsExtracted counts events committed for watched contracts.
+func (m *Metrics) IncEventsExtracted(n int) { m.EventsExtracted.Add(float64(n)) }
+
+// IncFailedTxs counts failed transactions skipped by extraction.
+func (m *Metrics) IncFailedTxs(n int) { m.FailedTxs.Add(float64(n)) }
+
+// IncSuppressedTxs counts transactions dropped as unreadable.
+func (m *Metrics) IncSuppressedTxs(n int) { m.SuppressedTxs.Add(float64(n)) }
+
+// IncSuppressedEvents counts events dropped as unencodable.
+func (m *Metrics) IncSuppressedEvents(n int) { m.SuppressedEvents.Add(float64(n)) }
 
 // Status is the snapshot served at /status. Fields are set atomically by the
 // ingest loop through State.

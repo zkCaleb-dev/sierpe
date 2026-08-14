@@ -155,7 +155,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 			Passphrase:  cfg.Network.Passphrase(),
 			StartLedger: cfg.StartLedger,
 		},
-		src, st, state, metrics, log,
+		src, st, reg, state, metrics, log,
 	)
 
 	loopErr := make(chan error, 1)

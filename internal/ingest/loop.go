@@ -16,6 +16,8 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 
+	"github.com/zkCaleb-dev/sierpe/internal/extract"
+	"github.com/zkCaleb-dev/sierpe/internal/registry"
 	"github.com/zkCaleb-dev/sierpe/internal/source"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
@@ -46,7 +48,13 @@ type ledgerSource interface {
 // cursorStore is the slice of the store the loop needs.
 type cursorStore interface {
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
-	CommitLedger(ctx context.Context, network string, rec store.LedgerRecord) error
+	CommitLedger(ctx context.Context, network string, rec store.LedgerRecord, events []store.Event) error
+}
+
+// snapshotter hands the loop the current watched-contracts view. Reading it
+// is a pointer load; the loop re-reads it once per ledger (KNOWLEDGE.md P2).
+type snapshotter interface {
+	Snapshot() *registry.Snapshot
 }
 
 // observer receives loop progress; the health package implements it.
@@ -60,6 +68,10 @@ type instruments interface {
 	IncLedgersIngested()
 	SetTipLag(time.Duration)
 	ObserveCommit(time.Duration)
+	IncEventsExtracted(n int)
+	IncFailedTxs(n int)
+	IncSuppressedTxs(n int)
+	IncSuppressedEvents(n int)
 }
 
 // Config parameterizes a Loop.
@@ -74,6 +86,7 @@ type Loop struct {
 	cfg   Config
 	src   ledgerSource
 	store cursorStore
+	watch snapshotter
 	obs   observer
 	inst  instruments
 	log   *slog.Logger
@@ -84,8 +97,8 @@ type Loop struct {
 }
 
 // New wires a Loop. All collaborators are required.
-func New(cfg Config, src ledgerSource, st cursorStore, obs observer, inst instruments, log *slog.Logger) *Loop {
-	return &Loop{cfg: cfg, src: src, store: st, obs: obs, inst: inst, log: log}
+func New(cfg Config, src ledgerSource, st cursorStore, watch snapshotter, obs observer, inst instruments, log *slog.Logger) *Loop {
+	return &Loop{cfg: cfg, src: src, store: st, watch: watch, obs: obs, inst: inst, log: log}
 }
 
 // Run drives ingestion until ctx is cancelled or an integrity violation is
@@ -147,6 +160,27 @@ func (l *Loop) Run(ctx context.Context) error {
 			)
 		}
 
+		// Extraction filters the whole ledger against the current snapshot
+		// (a pointer load per ledger — KNOWLEDGE.md P2). A ledger that does
+		// not parse is treated as transient: a retry may be served by a
+		// healthier endpoint in the pool.
+		extracted, err := extract.Events(lcm, l.cfg.Passphrase, l.watch.Snapshot())
+		if err != nil {
+			l.log.Warn("extraction failed, backing off", "ledger", next, "err", err)
+			if !sleepCtx(ctx, backoff) {
+				return nil
+			}
+			backoff = min(backoff*2, backoffMax)
+			continue
+		}
+		l.inst.IncFailedTxs(extracted.FailedTxs)
+		l.inst.IncSuppressedTxs(extracted.SuppressedTxs)
+		l.inst.IncSuppressedEvents(extracted.SuppressedEvents)
+		if extracted.SuppressedTxs > 0 || extracted.SuppressedEvents > 0 {
+			l.log.Warn("suppressed unreadable chain data",
+				"ledger", next, "txs", extracted.SuppressedTxs, "events", extracted.SuppressedEvents)
+		}
+
 		start := time.Now()
 		rec := store.LedgerRecord{
 			Sequence:     info.Sequence,
@@ -154,7 +188,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			PreviousHash: info.PreviousHash,
 			ClosedAt:     info.ClosedAt,
 		}
-		if err := l.store.CommitLedger(ctx, l.cfg.Network, rec); err != nil {
+		if err := l.store.CommitLedger(ctx, l.cfg.Network, rec, extracted.Events); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -167,6 +201,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		l.inst.ObserveCommit(time.Since(start))
 		l.inst.IncLedgersIngested()
+		l.inst.IncEventsExtracted(len(extracted.Events))
 
 		tipLag := time.Since(info.ClosedAt)
 		l.inst.SetTipLag(tipLag)
