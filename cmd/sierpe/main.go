@@ -21,9 +21,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zkCaleb-dev/sierpe/internal/admin"
 	"github.com/zkCaleb-dev/sierpe/internal/config"
 	"github.com/zkCaleb-dev/sierpe/internal/health"
 	"github.com/zkCaleb-dev/sierpe/internal/ingest"
+	"github.com/zkCaleb-dev/sierpe/internal/registry"
 	"github.com/zkCaleb-dev/sierpe/internal/source/rpc"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
@@ -83,10 +85,18 @@ func run(log *slog.Logger, withIngestion bool) error {
 	}
 	log.Info("database ready")
 
+	// The registry snapshot is what ingestion filters against; boot with the
+	// persisted registrations so a restart never ingests blind.
+	reg := registry.New(string(cfg.Network), st)
+	if err := reg.Reload(ctx); err != nil {
+		return err
+	}
+
 	metrics := health.NewMetrics()
 	state := &health.State{}
 	mux := http.NewServeMux()
 	health.NewServer(version, string(cfg.Network), state, metrics).Register(mux)
+	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, reg, log).Register(mux)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
@@ -108,6 +118,9 @@ func run(log *slog.Logger, withIngestion bool) error {
 
 	// Slow-moving status feeders (gaps count) refresh in the background.
 	go feedStatus(ctx, st, state, string(cfg.Network))
+	// Periodic reload converges the snapshot when a mutation happened in
+	// another instance (serve beside run) or its post-mutation reload failed.
+	go reloadRegistry(ctx, reg, log)
 
 	if !withIngestion {
 		log.Info("serve mode: ingestion disabled")
@@ -146,6 +159,24 @@ func run(log *slog.Logger, withIngestion bool) error {
 		return err
 	case err := <-httpErr:
 		return err
+	}
+}
+
+// reloadRegistry keeps the watched-contracts snapshot converged with the
+// database even when the in-process post-mutation reload is not the one that
+// saw the change.
+func reloadRegistry(ctx context.Context, reg *registry.Registry, log *slog.Logger) {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if err := reg.Reload(ctx); err != nil {
+				log.Warn("periodic registry reload failed", "err", err)
+			}
+		}
 	}
 }
 
