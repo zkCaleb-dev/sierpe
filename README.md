@@ -57,12 +57,44 @@ them, backfills them, and follows the tip.
   changes.
 - [SECURITY.md](SECURITY.md) — how to report vulnerabilities.
 
+## Quickstart (M1: events end-to-end)
+
+Requirements: Go 1.25+ (or the container, from M3 on) and an empty Postgres.
+
+```bash
+export DATABASE_URL=postgres://user:pass@localhost:5432/sierpe
+export NETWORK=testnet
+export ADMIN_TOKEN=change-me-to-something-long
+go run ./cmd/sierpe run
+```
+
+Register a contract — Sierpe classifies it from its on-chain spec, walks
+its history backwards in chunks, and follows the tip:
+
+```bash
+curl -X POST localhost:8080/v1/contracts \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"contract_id": "C...", "from": "genesis"}'
+```
+
+Query its events with getEvents-v2-style filters and honest paging:
+
+```bash
+curl "localhost:8080/v1/contracts/C.../events?topic0=<base64-scval>&limit=100"
+```
+
+Every response declares `coverage` and a `scanStatus`
+(`HAS_MORE | WAITING_FOR_LEDGERS | OLDEST_REACHED | COMPLETE`), and the
+opaque `cursor` encodes the whole query, so pagination never drifts. The
+full surface is specified in [docs/openapi.yaml](docs/openapi.yaml); metrics
+are documented in [docs/METRICS.md](docs/METRICS.md).
+
 ## Roadmap
 
 | Milestone | Contents |
 |---|---|
-| M0 | Skeleton: config, health, migrations, cursor loop with continuity checks |
-| M1 | Events end-to-end: registration, classification, live + backfill, events API |
+| M0 ✅ | Skeleton: config, health, migrations, cursor loop with continuity checks |
+| M1 ✅ | Events end-to-end: registration, classification, live + backfill, events API |
 | M2 | Contract state: change history + current snapshot |
 | M3 | Appliance polish: Railway template, Grafana dashboard, docs — **public v1** |
 | v1.1 | Archive replay (history below RPC retention), SAC transfers/trustlines |

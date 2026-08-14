@@ -1,0 +1,346 @@
+openapi: 3.0.3
+info:
+  title: Sierpe API
+  description: |
+    Self-hosted Stellar contract indexer. The events surface is a compatible
+    superset of the proposed getEvents v2 RPC semantics (stellar#1872):
+    positional topic filters, opaque cursors that encode the entire query,
+    and scan-status honesty. Coverage is declared in every events response —
+    an empty page always says whether it means "nothing happened" or "not
+    indexed yet".
+  version: 0.1.0-m1
+  license:
+    name: Apache-2.0
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: public
+    description: Read API, no authentication.
+  - name: admin
+    description: Mutations, authenticated with the ADMIN_TOKEN bearer.
+  - name: operational
+    description: Health and observability.
+
+paths:
+  /v1/contracts:
+    post:
+      tags: [admin]
+      summary: Register a contract (or reconcile an existing registration)
+      description: |
+        Idempotent. Classifies the contract from its on-chain spec, anchors
+        a descending backfill at the current cursor, and starts following it
+        live. Re-registering reconciles kinds; a deeper `from` reopens a
+        finished backfill; progress is never reset.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contract_id]
+              additionalProperties: false
+              properties:
+                contract_id:
+                  type: string
+                  description: C... strkey contract address.
+                kinds:
+                  type: array
+                  items: { type: string, enum: [events] }
+                  description: Data kinds to derive. Defaults to ["events"].
+                from:
+                  description: >
+                    Backfill origin: the string "genesis" (default) or a
+                    positive ledger number. Clamped at the retention wall
+                    with one persisted gap when sources cannot reach it.
+                  oneOf:
+                    - type: string
+                      enum: [genesis]
+                    - type: integer
+                      minimum: 1
+      responses:
+        "200":
+          description: The stored registration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: The contract does not exist on this network.
+        "502":
+          description: The chain could not be read to classify; retry later.
+
+  /v1/contracts/{id}:
+    delete:
+      tags: [admin]
+      summary: Unregister a contract
+      description: |
+        Idempotent. Stops following and backfilling. Indexed events are
+        kept: a later re-registration resumes instead of restarting.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/contractID" }]
+      responses:
+        "204": { description: Unregistered (or was never registered). }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    get:
+      tags: [public]
+      summary: Contract registration, classification, coverage and counts
+      parameters: [{ $ref: "#/components/parameters/contractID" }]
+      responses:
+        "200":
+          description: Contract detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContractDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/contracts/{id}/events:
+    get:
+      tags: [public]
+      summary: Query a contract's events (getEvents v2 compatible semantics)
+      description: |
+        Events in chain order (ascending id). Filters follow getEvents v2:
+        `topic0..topic3` match base64 ScVal values exactly, omitted
+        positions are wildcards, all present filters AND together.
+        Pagination is an opaque `cursor` that encodes the entire query;
+        cursors never expire and always honor the bounds they were minted
+        with. A cursor cannot be combined with filter or bound parameters.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: topic0
+          in: query
+          schema: { type: string }
+          description: Exact base64 ScVal for topic position 0.
+        - name: topic1
+          in: query
+          schema: { type: string }
+        - name: topic2
+          in: query
+          schema: { type: string }
+        - name: topic3
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: string, enum: [contract] }
+          description: M1 indexes contract events only.
+        - name: startLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+          description: Inclusive lower bound. Default 1.
+        - name: endLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+          description: Inclusive upper bound. Default unbounded (follow the tip).
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque page cursor from a previous response.
+      responses:
+        "200":
+          description: One page of events with scan status and coverage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventsPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /health:
+    get:
+      tags: [operational]
+      summary: Process liveness
+      responses:
+        "200": { description: The process is up. }
+  /ready:
+    get:
+      tags: [operational]
+      summary: Ingestion readiness
+      responses:
+        "200": { description: Ingestion is at the tip. }
+        "503": { description: Catching up or backfilling; do not route reads that need freshness. }
+  /status:
+    get:
+      tags: [operational]
+      summary: Human-readable instance status
+      responses:
+        "200":
+          description: Instance status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+  /metrics:
+    get:
+      tags: [operational]
+      summary: Prometheus metrics (documented in docs/METRICS.md)
+      responses:
+        "200": { description: Prometheus exposition format. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The ADMIN_TOKEN boot configuration value.
+
+  parameters:
+    contractID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: C... strkey contract address.
+
+  responses:
+    BadRequest:
+      description: Invalid input; the error message says exactly what to fix.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: The contract is not registered on this instance.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+
+    Contract:
+      type: object
+      properties:
+        contract_id: { type: string }
+        network: { type: string, enum: [testnet, mainnet] }
+        source: { type: string, enum: [api, config] }
+        kinds:
+          type: array
+          items: { type: string }
+        classification:
+          $ref: "#/components/schemas/Classification"
+        registered_at: { type: string, format: date-time }
+
+    Classification:
+      type: object
+      nullable: true
+      description: What registration learned from the chain. Advisory.
+      properties:
+        type: { type: string, enum: [wasm, sac, external] }
+        wasm_hash: { type: string, description: Hex code hash (wasm only). }
+        events:
+          type: array
+          items: { type: string }
+          description: Discovered event names, snake_case.
+        method:
+          type: string
+          enum: [spec_events, function_names, sac_builtin, opaque]
+          description: How the events were discovered.
+
+    ContractDetail:
+      allOf:
+        - $ref: "#/components/schemas/Contract"
+        - type: object
+          properties:
+            coverage: { $ref: "#/components/schemas/Coverage" }
+            events:
+              type: object
+              properties:
+                total: { type: integer, format: int64 }
+                by_name:
+                  type: object
+                  additionalProperties: { type: integer, format: int64 }
+
+    Coverage:
+      type: object
+      description: The range this instance can vouch for (rule 7).
+      properties:
+        requestedFromLedger: { type: integer }
+        requestedToLedger:
+          type: integer
+          nullable: true
+          description: null means the query follows the tip.
+        indexedFromLedger: { type: integer }
+        indexedToLedger: { type: integer }
+        backfillPending:
+          type: boolean
+          description: The lower bound is still improving.
+        clampedAt:
+          type: integer
+          nullable: true
+          description: >
+            History below this ledger is unreachable from current sources
+            (persisted as a gap; the archive leg can heal it).
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "{toid}-{event_index}, zero-padded, sortable."
+        type: { type: string, enum: [contract] }
+        ledger: { type: integer }
+        ledgerClosedAt: { type: string, format: date-time }
+        contractId: { type: string }
+        topic:
+          type: array
+          items: { type: string }
+          description: Base64 ScVal topics.
+        value: { type: string, description: Base64 ScVal event data. }
+        inSuccessfulContractCall:
+          type: boolean
+          description: Always true — failed transactions are never indexed.
+        txHash: { type: string }
+        txIndex: { type: integer }
+        opIndex: { type: integer }
+        eventName:
+          type: string
+          description: topic0 symbol when decodable. Sierpe extension.
+
+    EventsPage:
+      type: object
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+        cursor:
+          type: string
+          description: Opaque cursor for the next page. Always returned.
+        scanStatus:
+          type: string
+          enum: [HAS_MORE, WAITING_FOR_LEDGERS, OLDEST_REACHED, COMPLETE]
+          description: |
+            HAS_MORE: more matching rows exist now — follow the cursor.
+            WAITING_FOR_LEDGERS: the indexed range ended before the
+            requested bound; more may appear as the tip advances.
+            OLDEST_REACHED: the request reaches below what this instance
+            can vouch for (see coverage).
+            COMPLETE: the requested bounds are fully indexed and exhausted.
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+
+    Status:
+      type: object
+      properties:
+        version: { type: string }
+        network: { type: string }
+        started_at: { type: string, format: date-time }
+        ready: { type: boolean }
+        cursor_sequence: { type: integer }
+        latest_known_ledger: { type: integer }
+        tip_lag_seconds: { type: number }
+        open_gaps: { type: integer }
+        source_failovers: { type: integer }
+        pending_backfills: { type: integer }
