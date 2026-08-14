@@ -42,6 +42,17 @@ func (s *Snapshot) Get(contractID string) (store.Contract, bool) {
 // Len is the number of watched contracts.
 func (s *Snapshot) Len() int { return len(s.byID) }
 
+// StaticSnapshot builds a fixed snapshot from explicit contracts. The
+// backfill worker uses it to extract for exactly one registration without
+// touching the live registry.
+func StaticSnapshot(contracts ...store.Contract) *Snapshot {
+	byID := make(map[string]store.Contract, len(contracts))
+	for _, c := range contracts {
+		byID[c.ContractID] = c
+	}
+	return &Snapshot{byID: byID}
+}
+
 // Registry owns the current Snapshot for one network.
 type Registry struct {
 	network string

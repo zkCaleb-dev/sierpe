@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // SourceAPI marks a contract registered through the admin API. The value
@@ -50,17 +52,30 @@ func (s *Store) UpsertContract(ctx context.Context, c Contract) (Contract, error
 	return out, nil
 }
 
-// DeleteContract removes a registration. Idempotent: deleting an absent
-// contract is a no-op; the bool reports whether a row existed.
+// DeleteContract removes a registration and its backfill state in one
+// transaction. Idempotent: deleting an absent contract is a no-op; the bool
+// reports whether a row existed. Indexed events stay — a re-register
+// resumes instead of restarting from nothing.
 func (s *Store) DeleteContract(ctx context.Context, network, contractID string) (bool, error) {
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM contracts WHERE network = $1 AND contract_id = $2`,
-		network, contractID,
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: delete contract: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
+	var existed bool
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM backfill WHERE network = $1 AND contract_id = $2`,
+			network, contractID,
+		); err != nil {
+			return fmt.Errorf("store: delete backfill: %w", err)
+		}
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM contracts WHERE network = $1 AND contract_id = $2`,
+			network, contractID,
+		)
+		if err != nil {
+			return fmt.Errorf("store: delete contract: %w", err)
+		}
+		existed = tag.RowsAffected() > 0
+		return nil
+	})
+	return existed, err
 }
 
 // ListContracts returns every registration for a network in stable order.

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -35,6 +36,13 @@ type contractStore interface {
 	DeleteContract(ctx context.Context, network, contractID string) (bool, error)
 }
 
+// backfillPlanner anchors a registration's history walk (CLAUDE.md rule 5:
+// small consumer-side interfaces, one per concern).
+type backfillPlanner interface {
+	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
+	EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32) error
+}
+
 // reloader republishes the registry snapshot after a mutation.
 type reloader interface {
 	Reload(ctx context.Context) error
@@ -50,14 +58,15 @@ type Server struct {
 	network    string
 	token      string
 	store      contractStore
+	planner    backfillPlanner
 	registry   reloader
 	classifier classifier
 	log        *slog.Logger
 }
 
 // NewServer wires the admin API. All collaborators are required.
-func NewServer(network, token string, st contractStore, reg reloader, cls classifier, log *slog.Logger) *Server {
-	return &Server{network: network, token: token, store: st, registry: reg, classifier: cls, log: log}
+func NewServer(network, token string, st contractStore, planner backfillPlanner, reg reloader, cls classifier, log *slog.Logger) *Server {
+	return &Server{network: network, token: token, store: st, planner: planner, registry: reg, classifier: cls, log: log}
 }
 
 // Register mounts the admin routes onto mux.
@@ -90,6 +99,30 @@ func tokenEqual(got, want string) bool {
 type registerRequest struct {
 	ContractID string   `json:"contract_id"`
 	Kinds      []string `json:"kinds"`
+	// From is the backfill origin: absent or "genesis" walks history as far
+	// back as sources allow; a ledger number stops there.
+	From json.RawMessage `json:"from"`
+}
+
+// parseFrom interprets the backfill origin. Ledger sequences start at 1, so
+// genesis is target 1; the retention clamp keeps the promise honest when
+// sources cannot reach it.
+func parseFrom(raw json.RawMessage) (uint32, error) {
+	if len(raw) == 0 {
+		return 1, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "genesis" {
+			return 1, nil
+		}
+		return 0, fmt.Errorf("from %q is not supported (use genesis or a ledger number)", s)
+	}
+	var n uint64
+	if err := json.Unmarshal(raw, &n); err != nil || n == 0 || n > math.MaxUint32 {
+		return 0, fmt.Errorf("from %s must be genesis or a positive ledger number", raw)
+	}
+	return uint32(n), nil
 }
 
 // contractResponse is the public shape of a registration.
@@ -128,6 +161,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !strkey.IsValidContractAddress(req.ContractID) {
 		writeError(w, http.StatusBadRequest,
 			fmt.Sprintf("contract_id %q is not a valid contract address (C... strkey)", req.ContractID))
+		return
+	}
+	targetFrom, err := parseFrom(req.From)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	kinds := req.Kinds
@@ -176,9 +214,31 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
 		return
 	}
+	// Anchor the history walk at the current cursor: live ingestion covers
+	// everything after it, the backfill worker walks everything before it
+	// down to the target.
+	nextTo := uint32(0)
+	switch cursor, err := s.planner.LoadCursor(r.Context(), s.network); {
+	case err == nil:
+		nextTo = cursor.Sequence
+	case errors.Is(err, store.ErrNoCursor):
+		s.log.Warn("no ingestion cursor yet; history before this registration will not be backfilled",
+			"contract_id", saved.ContractID)
+	default:
+		s.log.Error("cursor read failed during registration", "contract_id", saved.ContractID, "err", err)
+		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
+		return
+	}
+	if err := s.planner.EnsureBackfill(r.Context(), s.network, saved.ContractID, targetFrom, nextTo); err != nil {
+		s.log.Error("backfill planning failed", "contract_id", saved.ContractID, "err", err)
+		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
+		return
+	}
+
 	s.reloadRegistry(r.Context())
 	s.log.Info("contract registered", "contract_id", saved.ContractID,
-		"kinds", saved.Kinds, "type", cls.Type, "method", cls.Method, "events", len(cls.Events))
+		"kinds", saved.Kinds, "type", cls.Type, "method", cls.Method,
+		"events", len(cls.Events), "backfill_from", targetFrom, "backfill_to", nextTo)
 	writeJSON(w, http.StatusOK, toResponse(saved))
 }
 

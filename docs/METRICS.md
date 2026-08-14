@@ -14,6 +14,9 @@ metric does not ship without a row here (CLAUDE.md verification rules).
 | `sierpe_failed_txs_skipped_total` | counter | Failed transactions skipped during extraction; their events never happened. | Routine traffic; no alert. |
 | `sierpe_suppressed_txs_total` | counter | Transactions dropped because their meta was unreadable or panicked mid-decode. | **Alert if nonzero** — this is counted data loss. |
 | `sierpe_suppressed_events_total` | counter | Events dropped because their XDR could not be re-encoded. | **Alert if nonzero** — same semantics. |
+| `sierpe_backfill_chunks_total` | counter | Backfill chunks committed since process start. | Stalls while `sierpe_backfill_pending` > 0 = stuck worker. |
+| `sierpe_backfill_ledgers_scanned_total` | counter | Ledgers covered by committed backfill chunks. | Progress rate of history walks. |
+| `sierpe_backfill_pending` | gauge | Registered contracts whose backfill has not finished. | Should drain to 0 after registrations. |
 
 The suppression counters exist because of CLAUDE.md rule 6: a silent guard
 turns an invisible failure into another invisible failure. Anything Sierpe

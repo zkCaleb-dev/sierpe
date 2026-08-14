@@ -105,11 +105,9 @@ func (c *Client) GetLedger(ctx context.Context, seq uint32) (xdr.LedgerCloseMeta
 		// what the source can actually serve (never trust getHealth).
 		var rpcErr *jsonRPCError
 		if errors.As(err, &rpcErr) && rpcErr.looksOutOfRange() {
-			latest, lerr := c.LatestLedger(ctx)
-			if lerr == nil && seq > latest {
-				return lcm, fmt.Errorf("ledger %d beyond tip %d: %w", seq, latest, source.ErrNotYetAvailable)
+			if err := c.classifyOutOfRange(ctx, seq); err != nil {
+				return lcm, err
 			}
-			return lcm, fmt.Errorf("ledger %d: %w", seq, source.ErrBelowRetention)
 		}
 		return lcm, fmt.Errorf("getLedgers(%d): %w", seq, err)
 	}
@@ -128,6 +126,74 @@ func (c *Client) GetLedger(ctx context.Context, seq uint32) (xdr.LedgerCloseMeta
 		return lcm, fmt.Errorf("decoding ledger %d meta: %w", seq, err)
 	}
 	return lcm, nil
+}
+
+// classifyOutOfRange decides what a window error means by probing the tip.
+// A failed probe returns nil so the caller reports the original error as
+// transient: fatally classifying below-retention on a flaky probe would
+// kill the process over a hiccup (the M0 bug this replaces did exactly
+// that under backfill load).
+func (c *Client) classifyOutOfRange(ctx context.Context, seq uint32) error {
+	latest, err := c.LatestLedger(ctx)
+	if err != nil {
+		return nil
+	}
+	if seq > latest {
+		return fmt.Errorf("ledger %d beyond tip %d: %w", seq, latest, source.ErrNotYetAvailable)
+	}
+	return fmt.Errorf("ledger %d: %w", seq, source.ErrBelowRetention)
+}
+
+// maxBatchLimit is the getLedgers pagination cap enforced by Stellar RPC.
+const maxBatchLimit = 200
+
+// GetLedgerBatch fetches up to limit consecutive ledgers ascending from
+// start. It returns what the endpoint served (possibly fewer than limit);
+// window errors classify exactly like GetLedger.
+func (c *Client) GetLedgerBatch(ctx context.Context, start uint32, limit int) ([]xdr.LedgerCloseMeta, error) {
+	if limit > maxBatchLimit {
+		limit = maxBatchLimit
+	}
+	params := map[string]any{
+		"startLedger": start,
+		"pagination":  map[string]any{"limit": limit},
+	}
+	var res struct {
+		Ledgers []struct {
+			Sequence    uint32 `json:"sequence"`
+			MetadataXDR string `json:"metadataXdr"`
+		} `json:"ledgers"`
+		LatestLedger uint32 `json:"latestLedger"`
+		OldestLedger uint32 `json:"oldestLedger"`
+	}
+	if err := c.call(ctx, "getLedgers", params, &res); err != nil {
+		var rpcErr *jsonRPCError
+		if errors.As(err, &rpcErr) && rpcErr.looksOutOfRange() {
+			if err := c.classifyOutOfRange(ctx, start); err != nil {
+				return nil, err
+			}
+		}
+		return nil, fmt.Errorf("getLedgers(%d,+%d): %w", start, limit, err)
+	}
+	if len(res.Ledgers) == 0 {
+		if start > res.LatestLedger {
+			return nil, fmt.Errorf("ledger %d beyond tip %d: %w", start, res.LatestLedger, source.ErrNotYetAvailable)
+		}
+		if start < res.OldestLedger {
+			return nil, fmt.Errorf("ledger %d below oldest %d: %w", start, res.OldestLedger, source.ErrBelowRetention)
+		}
+		return nil, fmt.Errorf("getLedgers(%d,+%d): empty result inside claimed window [%d,%d]", start, limit, res.OldestLedger, res.LatestLedger)
+	}
+
+	out := make([]xdr.LedgerCloseMeta, 0, len(res.Ledgers))
+	for _, l := range res.Ledgers {
+		var lcm xdr.LedgerCloseMeta
+		if err := xdr.SafeUnmarshalBase64(l.MetadataXDR, &lcm); err != nil {
+			return nil, fmt.Errorf("decoding ledger %d meta: %w", l.Sequence, err)
+		}
+		out = append(out, lcm)
+	}
+	return out, nil
 }
 
 // GetLedgerEntry fetches one current ledger entry by its base64 XDR key.

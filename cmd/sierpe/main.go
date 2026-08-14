@@ -111,7 +111,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	state := &health.State{}
 	mux := http.NewServeMux()
 	health.NewServer(version, string(cfg.Network), state, metrics).Register(mux)
-	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, reg, registry.NewClassifier(src), log).Register(mux)
+	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, st, reg, registry.NewClassifier(src), log).Register(mux)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
@@ -131,8 +131,9 @@ func run(log *slog.Logger, withIngestion bool) error {
 		_ = httpServer.Shutdown(shutdownCtx)
 	}()
 
-	// Slow-moving status feeders (gaps count) refresh in the background.
-	go feedStatus(ctx, st, state, string(cfg.Network))
+	// Slow-moving status feeders (gaps, pending backfills) refresh in the
+	// background.
+	go feedStatus(ctx, st, state, metrics, string(cfg.Network))
 	// Periodic reload converges the snapshot when a mutation happened in
 	// another instance (serve beside run) or its post-mutation reload failed.
 	go reloadRegistry(ctx, reg, log)
@@ -148,6 +149,14 @@ func run(log *slog.Logger, withIngestion bool) error {
 	}
 
 	go feedFailovers(ctx, src, state, metrics)
+
+	// The backfill worker walks registered history downward beside the live
+	// loop; they never touch the same ledgers (backfill ends where the
+	// registration cursor anchored it).
+	backfiller := ingest.NewBackfiller(
+		string(cfg.Network), cfg.Network.Passphrase(), src, st, metrics, log,
+	)
+	go backfiller.Run(ctx)
 
 	loop := ingest.New(
 		ingest.Config{
@@ -191,12 +200,17 @@ func reloadRegistry(ctx context.Context, reg *registry.Registry, log *slog.Logge
 }
 
 // feedStatus refreshes the database-backed status fields periodically.
-func feedStatus(ctx context.Context, st *store.Store, state *health.State, network string) {
+func feedStatus(ctx context.Context, st *store.Store, state *health.State, metrics *health.Metrics, network string) {
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
 	for {
 		if n, err := st.OpenGaps(ctx, network); err == nil {
 			state.SetOpenGaps(n)
+			metrics.OpenGaps.Set(float64(n))
+		}
+		if n, err := st.CountPendingBackfills(ctx, network); err == nil {
+			state.SetPendingBackfills(n)
+			metrics.BackfillPending.Set(float64(n))
 		}
 		select {
 		case <-ctx.Done():

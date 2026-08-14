@@ -29,6 +29,9 @@ type Metrics struct {
 	FailedTxs        prometheus.Counter
 	SuppressedTxs    prometheus.Counter
 	SuppressedEvents prometheus.Counter
+	BackfillChunks   prometheus.Counter
+	BackfillLedgers  prometheus.Counter
+	BackfillPending  prometheus.Gauge
 	registry         *prometheus.Registry
 }
 
@@ -75,6 +78,18 @@ func NewMetrics() *Metrics {
 			Name: "sierpe_suppressed_events_total",
 			Help: "Events dropped because their XDR could not be re-encoded. Alert if nonzero.",
 		}),
+		BackfillChunks: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_backfill_chunks_total",
+			Help: "Backfill chunks committed since process start.",
+		}),
+		BackfillLedgers: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_backfill_ledgers_scanned_total",
+			Help: "Ledgers covered by committed backfill chunks.",
+		}),
+		BackfillPending: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "sierpe_backfill_pending",
+			Help: "Registered contracts whose backfill has not finished.",
+		}),
 		registry: reg,
 	}
 }
@@ -103,28 +118,36 @@ func (m *Metrics) IncSuppressedTxs(n int) { m.SuppressedTxs.Add(float64(n)) }
 // IncSuppressedEvents counts events dropped as unencodable.
 func (m *Metrics) IncSuppressedEvents(n int) { m.SuppressedEvents.Add(float64(n)) }
 
+// IncBackfillChunks counts one committed backfill chunk.
+func (m *Metrics) IncBackfillChunks() { m.BackfillChunks.Inc() }
+
+// AddBackfillLedgers counts ledgers covered by committed chunks.
+func (m *Metrics) AddBackfillLedgers(n int) { m.BackfillLedgers.Add(float64(n)) }
+
 // Status is the snapshot served at /status. Fields are set atomically by the
 // ingest loop through State.
 type Status struct {
-	Version         string    `json:"version"`
-	Network         string    `json:"network"`
-	StartedAt       time.Time `json:"started_at"`
-	Ready           bool      `json:"ready"`
-	CursorSequence  uint32    `json:"cursor_sequence"`
-	LatestKnown     uint32    `json:"latest_known_ledger"`
-	TipLagSeconds   float64   `json:"tip_lag_seconds"`
-	OpenGaps        int64     `json:"open_gaps"`
-	SourceFailovers int64     `json:"source_failovers"`
+	Version          string    `json:"version"`
+	Network          string    `json:"network"`
+	StartedAt        time.Time `json:"started_at"`
+	Ready            bool      `json:"ready"`
+	CursorSequence   uint32    `json:"cursor_sequence"`
+	LatestKnown      uint32    `json:"latest_known_ledger"`
+	TipLagSeconds    float64   `json:"tip_lag_seconds"`
+	OpenGaps         int64     `json:"open_gaps"`
+	SourceFailovers  int64     `json:"source_failovers"`
+	PendingBackfills int64     `json:"pending_backfills"`
 }
 
 // State holds the mutable pieces of Status, safe for concurrent update.
 type State struct {
-	ready       atomic.Bool
-	cursor      atomic.Uint32
-	latestKnown atomic.Uint32
-	tipLagMilli atomic.Int64
-	openGaps    atomic.Int64
-	failovers   atomic.Int64
+	ready            atomic.Bool
+	cursor           atomic.Uint32
+	latestKnown      atomic.Uint32
+	tipLagMilli      atomic.Int64
+	openGaps         atomic.Int64
+	failovers        atomic.Int64
+	pendingBackfills atomic.Int64
 }
 
 // SetReady flips readiness; the loop calls it when it reaches the tip and
@@ -138,9 +161,11 @@ func (s *State) Observe(cursor, latest uint32, tipLag time.Duration) {
 	s.tipLagMilli.Store(tipLag.Milliseconds())
 }
 
-// SetOpenGaps and SetFailovers feed the slower-moving counters.
-func (s *State) SetOpenGaps(n int64)  { s.openGaps.Store(n) }
-func (s *State) SetFailovers(n int64) { s.failovers.Store(n) }
+// SetOpenGaps, SetFailovers, and SetPendingBackfills feed the slower-moving
+// counters.
+func (s *State) SetOpenGaps(n int64)         { s.openGaps.Store(n) }
+func (s *State) SetFailovers(n int64)        { s.failovers.Store(n) }
+func (s *State) SetPendingBackfills(n int64) { s.pendingBackfills.Store(n) }
 
 // Server wires the operational endpoints onto an http.ServeMux.
 type Server struct {
@@ -183,14 +208,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 func (s *Server) snapshot() Status {
 	return Status{
-		Version:         s.version,
-		Network:         s.network,
-		StartedAt:       s.startedAt,
-		Ready:           s.state.ready.Load(),
-		CursorSequence:  s.state.cursor.Load(),
-		LatestKnown:     s.state.latestKnown.Load(),
-		TipLagSeconds:   float64(s.state.tipLagMilli.Load()) / 1000,
-		OpenGaps:        s.state.openGaps.Load(),
-		SourceFailovers: s.state.failovers.Load(),
+		Version:          s.version,
+		Network:          s.network,
+		StartedAt:        s.startedAt,
+		Ready:            s.state.ready.Load(),
+		CursorSequence:   s.state.cursor.Load(),
+		LatestKnown:      s.state.latestKnown.Load(),
+		TipLagSeconds:    float64(s.state.tipLagMilli.Load()) / 1000,
+		OpenGaps:         s.state.openGaps.Load(),
+		SourceFailovers:  s.state.failovers.Load(),
+		PendingBackfills: s.state.pendingBackfills.Load(),
 	}
 }

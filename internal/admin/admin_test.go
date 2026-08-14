@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -73,11 +74,38 @@ func okClassifier() *fakeClassifier {
 	}}
 }
 
-func newTestServer(st *fakeStore, reg *fakeReloader, cls *fakeClassifier) *httptest.Server {
+// fakePlanner records backfill anchoring.
+type fakePlanner struct {
+	cursor    store.Cursor
+	cursorErr error
+	ensured   []string // "contract:target:nextTo"
+	ensureErr error
+}
+
+func (f *fakePlanner) LoadCursor(context.Context, string) (store.Cursor, error) {
+	if f.cursorErr != nil {
+		return store.Cursor{}, f.cursorErr
+	}
+	return f.cursor, nil
+}
+
+func (f *fakePlanner) EnsureBackfill(_ context.Context, _ string, contractID string, targetFrom, nextTo uint32) error {
+	if f.ensureErr != nil {
+		return f.ensureErr
+	}
+	f.ensured = append(f.ensured, fmt.Sprintf("%s:%d:%d", contractID, targetFrom, nextTo))
+	return nil
+}
+
+func newTestServerWithPlanner(st *fakeStore, planner *fakePlanner, reg *fakeReloader, cls *fakeClassifier) *httptest.Server {
 	mux := http.NewServeMux()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	NewServer("testnet", testToken, st, reg, cls, log).Register(mux)
+	NewServer("testnet", testToken, st, planner, reg, cls, log).Register(mux)
 	return httptest.NewServer(mux)
+}
+
+func newTestServer(st *fakeStore, reg *fakeReloader, cls *fakeClassifier) *httptest.Server {
+	return newTestServerWithPlanner(st, &fakePlanner{cursor: store.Cursor{Sequence: 500}}, reg, cls)
 }
 
 func doRequest(t *testing.T, method, url, token, body string) *http.Response {
@@ -290,6 +318,71 @@ func TestRegisterChainUnreachableIs502(t *testing.T) {
 	}
 	if len(st.upserted) != 0 {
 		t.Error("an unclassifiable contract must not be silently registered")
+	}
+}
+
+func TestRegisterPlansBackfill(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"default genesis", `{"contract_id":"` + validContract + `"}`,
+			validContract + ":1:500"},
+		{"explicit genesis", `{"contract_id":"` + validContract + `","from":"genesis"}`,
+			validContract + ":1:500"},
+		{"ledger number", `{"contract_id":"` + validContract + `","from":123}`,
+			validContract + ":123:500"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			planner := &fakePlanner{cursor: store.Cursor{Sequence: 500}}
+			srv := newTestServerWithPlanner(&fakeStore{}, planner, &fakeReloader{}, okClassifier())
+			defer srv.Close()
+
+			resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken, tc.body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if len(planner.ensured) != 1 || planner.ensured[0] != tc.want {
+				t.Errorf("ensured = %v, want [%s]", planner.ensured, tc.want)
+			}
+		})
+	}
+}
+
+func TestRegisterRejectsBadFrom(t *testing.T) {
+	st := &fakeStore{}
+	srv := newTestServer(st, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	for _, body := range []string{
+		`{"contract_id":"` + validContract + `","from":"yesterday"}`,
+		`{"contract_id":"` + validContract + `","from":0}`,
+		`{"contract_id":"` + validContract + `","from":-5}`,
+	} {
+		resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken, body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("body %s: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+	if len(st.upserted) != 0 {
+		t.Error("invalid from must reject before touching the store")
+	}
+}
+
+func TestRegisterWithoutCursorStillRegisters(t *testing.T) {
+	planner := &fakePlanner{cursorErr: store.ErrNoCursor}
+	srv := newTestServerWithPlanner(&fakeStore{}, planner, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: no cursor yet is a warning, not a failure", resp.StatusCode)
+	}
+	if len(planner.ensured) != 1 || planner.ensured[0] != validContract+":1:0" {
+		t.Errorf("ensured = %v, want an immediately-done backfill anchor", planner.ensured)
 	}
 }
 
