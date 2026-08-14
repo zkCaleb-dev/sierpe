@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/zkCaleb-dev/sierpe/internal/admin"
+	"github.com/zkCaleb-dev/sierpe/internal/api"
 	"github.com/zkCaleb-dev/sierpe/internal/config"
 	"github.com/zkCaleb-dev/sierpe/internal/health"
 	"github.com/zkCaleb-dev/sierpe/internal/ingest"
@@ -112,6 +113,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	mux := http.NewServeMux()
 	health.NewServer(version, string(cfg.Network), state, metrics).Register(mux)
 	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, st, reg, registry.NewClassifier(src), log).Register(mux)
+	api.NewServer(string(cfg.Network), st, st, log).Register(mux)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

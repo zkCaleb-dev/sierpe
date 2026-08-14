@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -76,6 +77,29 @@ func (s *Store) DeleteContract(ctx context.Context, network, contractID string) 
 		return nil
 	})
 	return existed, err
+}
+
+// ErrNoContract is returned by GetContract for unregistered contracts.
+var ErrNoContract = errors.New("store: contract not registered")
+
+// GetContract returns one registration.
+func (s *Store) GetContract(ctx context.Context, network, contractID string) (Contract, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT network, contract_id, source, kinds, classification, registered_at
+		FROM contracts
+		WHERE network = $1 AND contract_id = $2`,
+		network, contractID,
+	)
+	var c Contract
+	err := row.Scan(&c.Network, &c.ContractID, &c.Source, &c.Kinds,
+		&c.Classification, &c.RegisteredAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, ErrNoContract
+	}
+	if err != nil {
+		return c, fmt.Errorf("store: get contract: %w", err)
+	}
+	return c, nil
 }
 
 // ListContracts returns every registration for a network in stable order.
