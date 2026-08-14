@@ -1,0 +1,73 @@
+# Sierpe
+
+> **Status: pre-release, under active development.** The design is stable
+> ([docs/DESIGN.md](docs/DESIGN.md)); the implementation is landing milestone
+> by milestone. Nothing here is production-ready yet — watch the repo for the
+> first tagged release.
+
+**Your own Stellar indexer, deployed in minutes.**
+
+Sierpe is a self-hosted server that watches the Stellar network for the
+contracts *you* register and keeps their complete history — events and
+contract state — in your own Postgres, behind an honest REST API.
+
+```
+1. Deploy the container next to an empty Postgres
+2. POST /v1/contracts {"contract_id": "C...", "from": "genesis"}
+3. Sierpe discovers the contract's events from its on-chain spec and
+   backfills its full history — including ranges no RPC serves anymore
+4. GET /v1/contracts/C.../events?topic0=...&after=<cursor>
+```
+
+No forks, no custom code, no vendor. Configuration is data: register
+contracts at runtime through an authenticated API, and the indexer classifies
+them, backfills them, and follows the tip.
+
+## Why Sierpe
+
+- **Your infrastructure, your data.** A container plus a `DATABASE_URL`.
+  Runs the same on Railway, AWS, GCP, or a $5 VPS. Target cost for a typical
+  project: under $10/month.
+- **History past the RPC window.** Stellar RPCs retain ~7 days of events.
+  Sierpe backfills from genesis where sources allow, and is designed to
+  replay History Archives for ranges no RPC serves at all.
+- **Contract state, not just events.** Storage entry changes and current
+  snapshots — the data most event indexers ignore.
+- **Honest by construction.** Coverage and gaps are first-class data,
+  declared in every API response. An empty page always tells you whether
+  there is nothing — or whether we haven't indexed it yet.
+- **Forward-compatible.** The events API follows the semantics of the
+  proposed `getEvents` v2 RPC endpoint (filters, opaque cursors, scan
+  status), so integrations built against Sierpe speak tomorrow's standard.
+
+## What Sierpe is not
+
+- Not a hosted service — you run it (that's the point).
+- Not an analytics platform: no aggregations, no dashboards over your data.
+- Not a chain-wide indexer: it indexes the contracts you register.
+- Not a framework: if you have to write code to use it, that's a bug.
+
+## Documentation
+
+- [docs/DESIGN.md](docs/DESIGN.md) — architecture, data model, API surface,
+  configuration, milestones.
+- [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) — the study behind the design:
+  29 principles distilled from production indexers, each with its source.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to build, test, and propose
+  changes.
+- [SECURITY.md](SECURITY.md) — how to report vulnerabilities.
+
+## Roadmap
+
+| Milestone | Contents |
+|---|---|
+| M0 | Skeleton: config, health, migrations, cursor loop with continuity checks |
+| M1 | Events end-to-end: registration, classification, live + backfill, events API |
+| M2 | Contract state: change history + current snapshot |
+| M3 | Appliance polish: Railway template, Grafana dashboard, docs — **public v1** |
+| v1.1 | Archive replay (history below RPC retention), SAC transfers/trustlines |
+| v2 | Push delivery: signed webhooks, broker sinks, management UI |
+
+## License
+
+[Apache-2.0](LICENSE)

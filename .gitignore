@@ -1,0 +1,44 @@
+# Binaries and build output
+/sierpe
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Go workspace files (developer-local)
+go.work
+go.work.sum
+
+# Environment and secrets — never committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local state and data
+/data/
+*.db
+*.sqlite
+
+# Claude Code local settings (CLAUDE.md and .claude/ shared config ARE tracked)
+.claude/settings.local.json
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs and scratch
+*.log
+/tmp/
+/scratch/
