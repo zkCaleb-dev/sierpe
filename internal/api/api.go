@@ -45,6 +45,7 @@ type contractReader interface {
 	GetContract(ctx context.Context, network, contractID string) (store.Contract, error)
 	GetBackfill(ctx context.Context, network, contractID string) (store.Backfill, error)
 	EventCountsByName(ctx context.Context, network, contractID string) (map[string]int64, error)
+	CountStateEntries(ctx context.Context, network, contractID string) (int64, error)
 }
 
 // Server holds the public API dependencies.
@@ -294,11 +295,16 @@ type contractDetail struct {
 	RegisteredAt   string           `json:"registered_at"`
 	Coverage       coverageInfo     `json:"coverage"`
 	Events         contractEventAgg `json:"events"`
+	State          contractStateAgg `json:"state"`
 }
 
 type contractEventAgg struct {
 	Total  int64            `json:"total"`
 	ByName map[string]int64 `json:"by_name"`
+}
+
+type contractStateAgg struct {
+	Entries int64 `json:"entries"`
 }
 
 func (s *Server) handleContract(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +338,11 @@ func (s *Server) handleContract(w http.ResponseWriter, r *http.Request) {
 	for _, n := range counts {
 		total += n
 	}
+	stateEntries, err := s.contracts.CountStateEntries(r.Context(), s.network, contractID)
+	if err != nil {
+		s.serverError(w, "state counts failed", err)
+		return
+	}
 
 	detail := contractDetail{
 		ContractID:     contract.ContractID,
@@ -343,6 +354,7 @@ func (s *Server) handleContract(w http.ResponseWriter, r *http.Request) {
 		Coverage: s.coverage(r.Context(), contractID,
 			store.EventQuery{ContractID: contractID, FromLedger: 1}, cursorSeq),
 		Events: contractEventAgg{Total: total, ByName: counts},
+		State:  contractStateAgg{Entries: stateEntries},
 	}
 	writeJSON(w, http.StatusOK, detail)
 }

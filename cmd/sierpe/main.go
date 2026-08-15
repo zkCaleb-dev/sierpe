@@ -113,7 +113,9 @@ func run(log *slog.Logger, withIngestion bool) error {
 	mux := http.NewServeMux()
 	health.NewServer(version, string(cfg.Network), state, metrics).Register(mux)
 	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, st, reg, registry.NewClassifier(src), log).Register(mux)
-	api.NewServer(string(cfg.Network), st, st, log).Register(mux)
+	publicAPI := api.NewServer(string(cfg.Network), st, st, log)
+	publicAPI.Register(mux)
+	publicAPI.RegisterState(mux, st)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

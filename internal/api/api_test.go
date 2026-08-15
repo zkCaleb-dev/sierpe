@@ -40,9 +40,10 @@ func (f *fakeEventReader) LoadCursor(context.Context, string) (store.Cursor, err
 
 // fakeContractReader serves one registered contract with backfill state.
 type fakeContractReader struct {
-	contract store.Contract
-	backfill store.Backfill
-	counts   map[string]int64
+	contract     store.Contract
+	backfill     store.Backfill
+	counts       map[string]int64
+	stateEntries int64
 }
 
 func (f *fakeContractReader) GetContract(_ context.Context, _, contractID string) (store.Contract, error) {
@@ -64,6 +65,10 @@ func (f *fakeContractReader) EventCountsByName(context.Context, string, string) 
 		return map[string]int64{}, nil
 	}
 	return f.counts, nil
+}
+
+func (f *fakeContractReader) CountStateEntries(context.Context, string, string) (int64, error) {
+	return f.stateEntries, nil
 }
 
 func sampleEvent(id string, ledger uint32) store.Event {
@@ -330,5 +335,169 @@ func TestContractDetail(t *testing.T) {
 
 	if code := getJSON(t, srv.URL+"/v1/contracts/CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", nil); code != 404 {
 		t.Errorf("unknown contract status = %d, want 404", code)
+	}
+}
+
+// --- state endpoints (M2) ---------------------------------------------------
+
+type fakeStateReader struct {
+	entries []store.StateEntry
+	changes []store.StateChange
+	hasMore bool
+	queries []store.StateQuery
+}
+
+func (f *fakeStateReader) QueryStateEntries(_ context.Context, _ string, q store.StateQuery) ([]store.StateEntry, bool, error) {
+	f.queries = append(f.queries, q)
+	return f.entries, f.hasMore, nil
+}
+
+func (f *fakeStateReader) QueryStateChanges(_ context.Context, _ string, q store.StateQuery) ([]store.StateChange, bool, error) {
+	f.queries = append(f.queries, q)
+	return f.changes, f.hasMore, nil
+}
+
+func newTestAPIWithState(ev *fakeEventReader, cr *fakeContractReader, st *fakeStateReader) *httptest.Server {
+	mux := http.NewServeMux()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := NewServer("testnet", ev, cr, log)
+	server.Register(mux)
+	server.RegisterState(mux, st)
+	return httptest.NewServer(mux)
+}
+
+func TestStateSnapshotEndpoint(t *testing.T) {
+	st := &fakeStateReader{
+		entries: []store.StateEntry{{
+			ContractID: registered, KeyXDR: validTopic, Durability: "persistent",
+			ValueXDR: "AAAAAQ==", LastLedger: 5500, ClosedAt: time.Unix(1_700_000_000, 0).UTC(),
+		}},
+		hasMore: true,
+	}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithState(ev, defaultContractReader(), st)
+	defer srv.Close()
+
+	var resp stateSnapshotResponse
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/state?limit=1", &resp); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].LastModifiedLedger != 5500 {
+		t.Errorf("entries = %+v", resp.Entries)
+	}
+	if resp.Cursor == "" {
+		t.Fatal("hasMore snapshot must return a cursor")
+	}
+	if resp.Coverage.IndexedToLedger != 6000 {
+		t.Errorf("coverage = %+v", resp.Coverage)
+	}
+
+	// The cursor resumes the (key, durability) walk with the same limit.
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/state?cursor="+resp.Cursor, &stateSnapshotResponse{}); code != 200 {
+		t.Fatalf("cursor page status = %d", code)
+	}
+	q := st.queries[1]
+	if q.AfterKey != validTopic || q.AfterDurability != "persistent" || q.Limit != 1 {
+		t.Errorf("cursor query = %+v", q)
+	}
+}
+
+func TestStateHistoryEndpoint(t *testing.T) {
+	st := &fakeStateReader{
+		changes: []store.StateChange{{
+			ID: "0000000000000000100-0000000000", ContractID: registered,
+			LedgerSequence: 5500, ClosedAt: time.Unix(1_700_000_000, 0).UTC(),
+			TxHash: "beef", ChangeType: "updated", KeyXDR: validTopic,
+			Durability: "persistent", PreXDR: "AAAAAQ==", PostXDR: "AAAAAg==",
+		}},
+	}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithState(ev, defaultContractReader(), st)
+	defer srv.Close()
+
+	var resp stateHistoryResponse
+	url := srv.URL + "/v1/contracts/" + registered + "/state/history?key=" + validTopic + "&startLedger=2000"
+	if code := getJSON(t, url, &resp); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if len(resp.Changes) != 1 || resp.Changes[0].ChangeType != "updated" {
+		t.Errorf("changes = %+v", resp.Changes)
+	}
+	if resp.ScanStatus != scanWaitingForLedgers {
+		t.Errorf("scanStatus = %s, want WAITING_FOR_LEDGERS (unbounded end)", resp.ScanStatus)
+	}
+	q := st.queries[0]
+	if q.KeyXDR != validTopic || q.FromLedger != 2000 {
+		t.Errorf("query = %+v", q)
+	}
+
+	// Cursor pages keep the key filter and bounds.
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/state/history?cursor="+resp.Cursor, &stateHistoryResponse{}); code != 200 {
+		t.Fatalf("cursor page status = %d", code)
+	}
+	q = st.queries[1]
+	if q.KeyXDR != validTopic || q.FromLedger != 2000 || q.AfterID != "0000000000000000100-0000000000" {
+		t.Errorf("cursor query = %+v", q)
+	}
+}
+
+func TestStateCursorsAreEndpointBound(t *testing.T) {
+	st := &fakeStateReader{}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithState(ev, defaultContractReader(), st)
+	defer srv.Close()
+
+	historyCursor := encodeStateCursor("testnet", kindHistory,
+		store.StateQuery{ContractID: registered, Limit: 10})
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/state?cursor="+historyCursor, nil); code != 400 {
+		t.Errorf("snapshot with history cursor: status = %d, want 400", code)
+	}
+	eventsCursor := encodeCursor("testnet", store.EventQuery{ContractID: registered, Limit: 10}, "")
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/state/history?cursor="+eventsCursor, nil); code != 400 {
+		t.Errorf("history with events cursor: status = %d, want 400", code)
+	}
+}
+
+func TestStateValidation(t *testing.T) {
+	st := &fakeStateReader{}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithState(ev, defaultContractReader(), st)
+	defer srv.Close()
+
+	base := srv.URL + "/v1/contracts/" + registered
+	cases := map[string]string{
+		"bad key":           base + "/state?key=!!!",
+		"bad limit":         base + "/state?limit=0",
+		"bad history start": base + "/state/history?startLedger=x",
+		"inverted history":  base + "/state/history?startLedger=10&endLedger=5",
+	}
+	for name, url := range cases {
+		if code := getJSON(t, url, nil); code != 400 {
+			t.Errorf("%s: status = %d, want 400", name, code)
+		}
+	}
+	if len(st.queries) != 0 {
+		t.Error("invalid requests must never reach the store")
+	}
+
+	other := "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+other+"/state", nil); code != 404 {
+		t.Errorf("unregistered contract: status = %d, want 404", code)
+	}
+}
+
+func TestContractDetailIncludesState(t *testing.T) {
+	cr := defaultContractReader()
+	cr.stateEntries = 7
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPI(ev, cr)
+	defer srv.Close()
+
+	var detail contractDetail
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered, &detail); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if detail.State.Entries != 7 {
+		t.Errorf("state entries = %d, want 7", detail.State.Entries)
 	}
 }
