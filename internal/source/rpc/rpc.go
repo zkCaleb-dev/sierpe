@@ -128,18 +128,26 @@ func (c *Client) GetLedger(ctx context.Context, seq uint32) (xdr.LedgerCloseMeta
 	return lcm, nil
 }
 
+// tipAmbiguitySlack bounds the zone where a window error near the tip is
+// the serving window lagging the tip report (getLatestLedger can announce a
+// ledger getLedgers does not serve yet). Retention walls sit hundreds of
+// thousands of ledgers below the tip, so anything this close is always
+// "wait", never "fail".
+const tipAmbiguitySlack = 64
+
 // classifyOutOfRange decides what a window error means by probing the tip.
 // A failed probe returns nil so the caller reports the original error as
 // transient: fatally classifying below-retention on a flaky probe would
-// kill the process over a hiccup (the M0 bug this replaces did exactly
-// that under backfill load).
+// kill the process over a hiccup. Requests at or near the reported tip
+// classify as not-yet-available even when seq <= latest — the two RPC
+// views race, and the loop treats below-retention as fatal.
 func (c *Client) classifyOutOfRange(ctx context.Context, seq uint32) error {
 	latest, err := c.LatestLedger(ctx)
 	if err != nil {
 		return nil
 	}
-	if seq > latest {
-		return fmt.Errorf("ledger %d beyond tip %d: %w", seq, latest, source.ErrNotYetAvailable)
+	if seq+tipAmbiguitySlack >= latest {
+		return fmt.Errorf("ledger %d at or beyond tip %d: %w", seq, latest, source.ErrNotYetAvailable)
 	}
 	return fmt.Errorf("ledger %d: %w", seq, source.ErrBelowRetention)
 }
