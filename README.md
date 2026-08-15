@@ -57,7 +57,7 @@ them, backfills them, and follows the tip.
   changes.
 - [SECURITY.md](SECURITY.md) — how to report vulnerabilities.
 
-## Quickstart (M1: events end-to-end)
+## Quickstart (M2: events and state end-to-end)
 
 Requirements: Go 1.25+ (or the container, from M3 on) and an empty Postgres.
 
@@ -77,10 +77,13 @@ curl -X POST localhost:8080/v1/contracts \
   -d '{"contract_id": "C...", "from": "genesis"}'
 ```
 
-Query its events with getEvents-v2-style filters and honest paging:
+Query its events with getEvents-v2-style filters, its current storage
+snapshot, or the full change history of any entry — all with honest paging:
 
 ```bash
 curl "localhost:8080/v1/contracts/C.../events?topic0=<base64-scval>&limit=100"
+curl "localhost:8080/v1/contracts/C.../state?key=<base64-scval>"
+curl "localhost:8080/v1/contracts/C.../state/history?startLedger=..."
 ```
 
 Every response declares `coverage` and a `scanStatus`
@@ -95,7 +98,7 @@ are documented in [docs/METRICS.md](docs/METRICS.md).
 |---|---|
 | M0 ✅ | Skeleton: config, health, migrations, cursor loop with continuity checks |
 | M1 ✅ | Events end-to-end: registration, classification, live + backfill, events API |
-| M2 | Contract state: change history + current snapshot |
+| M2 ✅ | Contract state: change history + current snapshot |
 | M3 | Appliance polish: Railway template, Grafana dashboard, docs — **public v1** |
 | v1.1 | Archive replay (history below RPC retention), SAC transfers/trustlines |
 | v2 | Push delivery: signed webhooks, broker sinks, management UI |

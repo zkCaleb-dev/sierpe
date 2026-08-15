@@ -134,6 +134,9 @@ func applyStateEntries(ctx context.Context, tx pgx.Tx, network string, changes [
 type StateQuery struct {
 	ContractID string
 	KeyXDR     string // exact key filter; "" = all keys
+	// FromLedger and ToLedger bound history queries (0 = unbounded).
+	FromLedger uint32
+	ToLedger   uint32
 	// AfterID paginates history (change id ascending).
 	AfterID string
 	// AfterKey and AfterDurability paginate the snapshot ((key, durability)
@@ -199,6 +202,14 @@ func (s *Store) QueryStateChanges(ctx context.Context, network string, q StateQu
 		FROM state_changes
 		WHERE network = $1 AND contract_id = $2`
 	args := []any{network, q.ContractID}
+	if q.FromLedger > 0 {
+		args = append(args, int64(q.FromLedger))
+		sql += fmt.Sprintf(" AND ledger_sequence >= $%d", len(args))
+	}
+	if q.ToLedger > 0 {
+		args = append(args, int64(q.ToLedger))
+		sql += fmt.Sprintf(" AND ledger_sequence <= $%d", len(args))
+	}
 	if q.KeyXDR != "" {
 		args = append(args, q.KeyXDR)
 		sql += fmt.Sprintf(" AND key_xdr = $%d", len(args))

@@ -152,6 +152,71 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/contracts/{id}/state:
+    get:
+      tags: [public]
+      summary: Current contract storage snapshot
+      description: |
+        Live contract-data entries in (key, durability) order; removed
+        entries never appear. The snapshot converges from live ingestion and
+        backfill; coverage declares how much history backs it. Pagination is
+        an opaque cursor bound to this endpoint.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: key
+          in: query
+          schema: { type: string }
+          description: Exact base64 ScVal entry key.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of live entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StateSnapshotPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/contracts/{id}/state/history:
+    get:
+      tags: [public]
+      summary: Contract storage change history
+      description: |
+        Every entry change in chain order with provenance and before/after
+        values. Same pagination and honesty contract as the events endpoint:
+        opaque full-query cursors, scanStatus, declared coverage.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: key
+          in: query
+          schema: { type: string }
+          description: Exact base64 ScVal entry key.
+        - name: startLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: endLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of changes with scan status and coverage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StateHistoryPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       tags: [operational]
@@ -328,6 +393,56 @@ components:
             OLDEST_REACHED: the request reaches below what this instance
             can vouch for (see coverage).
             COMPLETE: the requested bounds are fully indexed and exhausted.
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+
+    StateEntry:
+      type: object
+      properties:
+        key: { type: string, description: Base64 ScVal entry key. }
+        durability: { type: string, enum: [temporary, persistent] }
+        value: { type: string, description: Base64 ScVal entry value. }
+        lastModifiedLedger: { type: integer }
+        closedAt: { type: string, format: date-time }
+
+    StateSnapshotPage:
+      type: object
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/StateEntry" }
+        cursor:
+          type: string
+          description: Present only when more entries exist.
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+
+    StateChange:
+      type: object
+      properties:
+        id: { type: string, description: "{toid}-{change_index}, sortable." }
+        ledger: { type: integer }
+        ledgerClosedAt: { type: string, format: date-time }
+        contractId: { type: string }
+        key: { type: string, description: Base64 ScVal entry key. }
+        durability: { type: string, enum: [temporary, persistent] }
+        changeType: { type: string, enum: [created, updated, removed, restored] }
+        pre: { type: string, description: Base64 ScVal value before (absent on create). }
+        post: { type: string, description: Base64 ScVal value after (absent on remove). }
+        txHash: { type: string }
+        txIndex: { type: integer }
+        opIndex: { type: integer }
+
+    StateHistoryPage:
+      type: object
+      properties:
+        changes:
+          type: array
+          items: { $ref: "#/components/schemas/StateChange" }
+        cursor: { type: string }
+        scanStatus:
+          type: string
+          enum: [HAS_MORE, WAITING_FOR_LEDGERS, OLDEST_REACHED, COMPLETE]
         coverage: { $ref: "#/components/schemas/Coverage" }
         latestLedger: { type: integer }
 

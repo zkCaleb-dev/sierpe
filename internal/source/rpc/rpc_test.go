@@ -66,6 +66,24 @@ func TestWindowErrorBelowRetentionFailsFast(t *testing.T) {
 	}
 }
 
+// Regression: a window error AT the reported tip must classify as
+// not-yet-available even when seq <= latest. getLatestLedger can announce a
+// ledger before getLedgers serves it; treating that race as below-retention
+// killed the live loop at the tip twice during M1/M2 smoke tests.
+func TestWindowErrorAtTipWaits(t *testing.T) {
+	// getLedgers refuses the request while getLatestLedger claims the very
+	// same sequence exists.
+	srv := stubRPC(t, 150, false)
+	defer srv.Close()
+	c, _ := New([]string{srv.URL})
+
+	for _, seq := range []uint32{150, 149, 150 - tipAmbiguitySlack} {
+		if _, err := c.GetLedger(context.Background(), seq); !errors.Is(err, source.ErrNotYetAvailable) {
+			t.Errorf("GetLedger(%d) = %v, want ErrNotYetAvailable (tip race is a wait, not a fatal)", seq, err)
+		}
+	}
+}
+
 // Regression: a window error whose tip probe ALSO fails must classify as
 // transient, never below-retention — the loop treats below-retention as
 // fatal, and a flaky probe under load must not kill the process.
