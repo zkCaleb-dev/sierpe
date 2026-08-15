@@ -51,6 +51,8 @@ them, backfills them, and follows the tip.
 
 - [docs/DESIGN.md](docs/DESIGN.md) — architecture, data model, API surface,
   configuration, milestones.
+- [docs/DEPLOY.md](docs/DEPLOY.md) — Railway, Docker Compose, and generic
+  container deployments.
 - [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) — the study behind the design:
   29 principles distilled from production indexers, each with its source.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to build, test, and propose
@@ -59,7 +61,7 @@ them, backfills them, and follows the tip.
 
 ## Quickstart (M2: events and state end-to-end)
 
-Requirements: Go 1.25+ (or the container, from M3 on) and an empty Postgres.
+Requirements: Docker (or Go 1.25+) and an empty Postgres — see [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ```bash
 export DATABASE_URL=postgres://user:pass@localhost:5432/sierpe
@@ -99,7 +101,7 @@ are documented in [docs/METRICS.md](docs/METRICS.md).
 | M0 ✅ | Skeleton: config, health, migrations, cursor loop with continuity checks |
 | M1 ✅ | Events end-to-end: registration, classification, live + backfill, events API |
 | M2 ✅ | Contract state: change history + current snapshot |
-| M3 | Appliance polish: Railway template, Grafana dashboard, docs — **public v1** |
+| M3 ✅ | Appliance polish: container, compose, Grafana dashboard, status page, docs — release tag pending the final name |
 | v1.1 | Archive replay (history below RPC retention), SAC transfers/trustlines |
 | v2 | Push delivery: signed webhooks, broker sinks, management UI |
 

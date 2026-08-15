@@ -1,0 +1,31 @@
+# Release pipeline: static binaries per platform plus the container image.
+# Run manually until CI is unblocked:
+#
+#   goreleaser release --clean        # on a tagged commit
+#   goreleaser release --snapshot     # dry run, no publishing
+
+version: 2
+
+project_name: sierpe
+
+builds:
+  - main: ./cmd/sierpe
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true # CHANGELOG.md is written by hand
+
+release:
+  draft: true # a human presses publish
