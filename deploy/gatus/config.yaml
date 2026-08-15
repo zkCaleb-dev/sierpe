@@ -1,0 +1,38 @@
+# Public status page for a Sierpe instance (https://github.com/TwiN/gatus).
+# In this ecosystem observability is part of the product: run this next to
+# your instance and publish it.
+#
+#   docker run -d -p 8080:8080 \
+#     -v ./config.yaml:/config/config.yaml twinproduction/gatus
+
+endpoints:
+  - name: api
+    group: sierpe
+    url: "https://YOUR-INSTANCE/health"
+    interval: 30s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 1000"
+
+  - name: ingestion at tip
+    group: sierpe
+    url: "https://YOUR-INSTANCE/ready"
+    interval: 30s
+    conditions:
+      - "[STATUS] == 200"
+
+  - name: tip lag
+    group: sierpe
+    url: "https://YOUR-INSTANCE/status"
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].tip_lag_seconds < 60"
+
+  - name: no open gaps
+    group: sierpe
+    url: "https://YOUR-INSTANCE/status"
+    interval: 300s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].open_gaps == 0"
