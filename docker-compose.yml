@@ -1,0 +1,37 @@
+# Local and VPS deployment: Sierpe next to its own Postgres.
+# The database belongs to the app (it owns the schema and migrations);
+# point your tools at the API, never at the tables.
+
+services:
+  sierpe:
+    build: .
+    # image: ghcr.io/zkcaleb-dev/sierpe:latest   # once images are published
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://sierpe:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/sierpe?sslmode=disable
+      NETWORK: ${NETWORK:-testnet}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN (min 16 chars)}
+      # RPC_URLS: https://your-rpc-1,https://your-rpc-2   # required on mainnet
+    ports:
+      - "8080:8080"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sierpe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: sierpe
+    volumes:
+      - sierpe-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sierpe -d sierpe"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  sierpe-pgdata:
