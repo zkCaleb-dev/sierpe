@@ -36,7 +36,7 @@ type chunkSource interface {
 // backfillStore is the store slice the backfiller consumes.
 type backfillStore interface {
 	ListPendingBackfills(ctx context.Context, network string) ([]store.BackfillJob, error)
-	CommitBackfillChunk(ctx context.Context, network string, b store.Backfill, events []store.Event) error
+	CommitBackfillChunk(ctx context.Context, network string, b store.Backfill, events []store.Event, states []store.StateChange) error
 	RecordGap(ctx context.Context, network string, from, to uint32, reason string) error
 }
 
@@ -45,6 +45,7 @@ type backfillInstruments interface {
 	IncBackfillChunks()
 	AddBackfillLedgers(n int)
 	IncEventsExtracted(n int)
+	IncStateChangesExtracted(n int)
 	IncFailedTxs(n int)
 	IncSuppressedTxs(n int)
 	IncSuppressedEvents(n int)
@@ -121,7 +122,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 	if bf.NextTo < bf.TargetFrom {
 		next := bf
 		next.Done = true
-		return b.store.CommitBackfillChunk(ctx, b.network, next, nil)
+		return b.store.CommitBackfillChunk(ctx, b.network, next, nil, nil)
 	}
 	chunkFrom := bf.TargetFrom
 	if span := bf.NextTo - bf.TargetFrom; span >= backfillChunkSize {
@@ -129,7 +130,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 	}
 	snap := registry.StaticSnapshot(job.Contract)
 
-	events, stats, err := b.scan(ctx, snap, chunkFrom, bf.NextTo)
+	events, states, stats, err := b.scan(ctx, snap, chunkFrom, bf.NextTo)
 	next := bf
 	switch {
 	case err == nil:
@@ -150,7 +151,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 		next.Done = true
 		next.ClampedAt = &wall
 		if wall <= bf.NextTo {
-			events, stats, err = b.scan(ctx, snap, wall, bf.NextTo)
+			events, states, stats, err = b.scan(ctx, snap, wall, bf.NextTo)
 			if err != nil {
 				return fmt.Errorf("scanning above the wall: %w", err)
 			}
@@ -164,13 +165,14 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 		return err
 	}
 
-	if err := b.store.CommitBackfillChunk(ctx, b.network, next, events); err != nil {
+	if err := b.store.CommitBackfillChunk(ctx, b.network, next, events, states); err != nil {
 		return err
 	}
 
 	b.inst.IncBackfillChunks()
 	b.inst.AddBackfillLedgers(int(bf.NextTo) - int(next.NextTo))
 	b.inst.IncEventsExtracted(len(events))
+	b.inst.IncStateChangesExtracted(len(states))
 	b.inst.IncFailedTxs(stats.FailedTxs)
 	b.inst.IncSuppressedTxs(stats.SuppressedTxs)
 	b.inst.IncSuppressedEvents(stats.SuppressedEvents)
@@ -181,14 +183,16 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 	}
 	b.log.Info("backfill: chunk committed",
 		"contract_id", job.Contract.ContractID,
-		"from", next.NextTo+1, "to", bf.NextTo, "events", len(events), "done", next.Done)
+		"from", next.NextTo+1, "to", bf.NextTo,
+		"events", len(events), "state_changes", len(states), "done", next.Done)
 	return nil
 }
 
 // scan fetches and extracts ledgers [from .. to] ascending, verifying hash
 // continuity inside the range (rule 6: never trust a source blindly).
-func (b *Backfiller) scan(ctx context.Context, snap *registry.Snapshot, from, to uint32) ([]store.Event, extract.Result, error) {
+func (b *Backfiller) scan(ctx context.Context, snap *registry.Snapshot, from, to uint32) ([]store.Event, []store.StateChange, extract.Result, error) {
 	var events []store.Event
+	var states []store.StateChange
 	var stats extract.Result
 	var prevHash string
 
@@ -200,30 +204,31 @@ func (b *Backfiller) scan(ctx context.Context, snap *registry.Snapshot, from, to
 		}
 		batch, err := b.src.GetLedgerBatch(ctx, seq, limit)
 		if err != nil {
-			return nil, stats, err
+			return nil, nil, stats, err
 		}
 		for _, lcm := range batch {
 			info := source.InfoOf(lcm)
 			if info.Sequence != seq {
-				return nil, stats, fmt.Errorf("asked for ledger %d, source returned %d", seq, info.Sequence)
+				return nil, nil, stats, fmt.Errorf("asked for ledger %d, source returned %d", seq, info.Sequence)
 			}
 			if prevHash != "" && info.PreviousHash != prevHash {
-				return nil, stats, fmt.Errorf("hash discontinuity at ledger %d inside backfill chunk", info.Sequence)
+				return nil, nil, stats, fmt.Errorf("hash discontinuity at ledger %d inside backfill chunk", info.Sequence)
 			}
 			prevHash = info.Hash
 
 			res, err := extract.Events(lcm, b.passphrase, snap)
 			if err != nil {
-				return nil, stats, fmt.Errorf("extract ledger %d: %w", info.Sequence, err)
+				return nil, nil, stats, fmt.Errorf("extract ledger %d: %w", info.Sequence, err)
 			}
 			events = append(events, res.Events...)
+			states = append(states, res.StateChanges...)
 			stats.FailedTxs += res.FailedTxs
 			stats.SuppressedTxs += res.SuppressedTxs
 			stats.SuppressedEvents += res.SuppressedEvents
 			seq++
 		}
 	}
-	return events, stats, nil
+	return events, states, stats, nil
 }
 
 // findWall binary-searches [lo .. hi] for the oldest ledger the source will

@@ -48,7 +48,7 @@ type ledgerSource interface {
 // cursorStore is the slice of the store the loop needs.
 type cursorStore interface {
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
-	CommitLedger(ctx context.Context, network string, rec store.LedgerRecord, events []store.Event) error
+	CommitLedger(ctx context.Context, network string, rec store.LedgerRecord, events []store.Event, states []store.StateChange) error
 }
 
 // snapshotter hands the loop the current watched-contracts view. Reading it
@@ -69,6 +69,7 @@ type instruments interface {
 	SetTipLag(time.Duration)
 	ObserveCommit(time.Duration)
 	IncEventsExtracted(n int)
+	IncStateChangesExtracted(n int)
 	IncFailedTxs(n int)
 	IncSuppressedTxs(n int)
 	IncSuppressedEvents(n int)
@@ -188,7 +189,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			PreviousHash: info.PreviousHash,
 			ClosedAt:     info.ClosedAt,
 		}
-		if err := l.store.CommitLedger(ctx, l.cfg.Network, rec, extracted.Events); err != nil {
+		if err := l.store.CommitLedger(ctx, l.cfg.Network, rec, extracted.Events, extracted.StateChanges); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -202,6 +203,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.inst.ObserveCommit(time.Since(start))
 		l.inst.IncLedgersIngested()
 		l.inst.IncEventsExtracted(len(extracted.Events))
+		l.inst.IncStateChangesExtracted(len(extracted.StateChanges))
 
 		tipLag := time.Since(info.ClosedAt)
 		l.inst.SetTipLag(tipLag)

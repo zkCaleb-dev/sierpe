@@ -145,12 +145,20 @@ func (s *Store) CountPendingBackfills(ctx context.Context, network string) (int6
 }
 
 // CommitBackfillChunk persists one processed chunk atomically: the chunk's
-// events and the moved next_to watermark either both land or neither does
+// records and the moved next_to watermark either both land or neither does
 // (the backfill analog of CLAUDE.md rule 1). Interruption loses at most one
-// chunk of work, never correctness.
-func (s *Store) CommitBackfillChunk(ctx context.Context, network string, b Backfill, events []Event) error {
+// chunk of work, never correctness. State entries stay convergent because
+// their upsert is guarded by last_ledger — replaying older history never
+// overwrites newer state.
+func (s *Store) CommitBackfillChunk(ctx context.Context, network string, b Backfill, events []Event, states []StateChange) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := insertEvents(ctx, tx, network, events); err != nil {
+			return err
+		}
+		if err := insertStateChanges(ctx, tx, network, states); err != nil {
+			return err
+		}
+		if err := applyStateEntries(ctx, tx, network, states); err != nil {
 			return err
 		}
 		var clamped *int64

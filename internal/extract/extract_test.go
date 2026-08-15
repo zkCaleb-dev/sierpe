@@ -375,3 +375,177 @@ func TestEventsEmptyWatchIsNoOp(t *testing.T) {
 		t.Errorf("empty watch must extract nothing, got %+v", res)
 	}
 }
+
+// --- state change tests (M2) -----------------------------------------------
+
+func dataEntry(t *testing.T, contract, keySym string, val int64, durability xdr.ContractDataDurability) xdr.LedgerEntry {
+	t.Helper()
+	cid := contractIDOf(t, contract)
+	v := xdr.Int64(val)
+	return xdr.LedgerEntry{
+		Data: xdr.LedgerEntryData{
+			Type: xdr.LedgerEntryTypeContractData,
+			ContractData: &xdr.ContractDataEntry{
+				Contract:   xdr.ScAddress{Type: xdr.ScAddressTypeScAddressTypeContract, ContractId: &cid},
+				Key:        symbol(keySym),
+				Durability: durability,
+				Val:        xdr.ScVal{Type: xdr.ScValTypeScvI64, I64: &v},
+			},
+		},
+	}
+}
+
+func changeCreated(e xdr.LedgerEntry) []xdr.LedgerEntryChange {
+	return []xdr.LedgerEntryChange{{Type: xdr.LedgerEntryChangeTypeLedgerEntryCreated, Created: &e}}
+}
+
+func changeUpdated(pre, post xdr.LedgerEntry) []xdr.LedgerEntryChange {
+	return []xdr.LedgerEntryChange{
+		{Type: xdr.LedgerEntryChangeTypeLedgerEntryState, State: &pre},
+		{Type: xdr.LedgerEntryChangeTypeLedgerEntryUpdated, Updated: &post},
+	}
+}
+
+func changeRemoved(t *testing.T, pre xdr.LedgerEntry) []xdr.LedgerEntryChange {
+	t.Helper()
+	data, ok := pre.Data.GetContractData()
+	if !ok {
+		t.Fatal("pre entry is not contract data")
+	}
+	key := xdr.LedgerKey{
+		Type: xdr.LedgerEntryTypeContractData,
+		ContractData: &xdr.LedgerKeyContractData{
+			Contract: data.Contract, Key: data.Key, Durability: data.Durability,
+		},
+	}
+	return []xdr.LedgerEntryChange{
+		{Type: xdr.LedgerEntryChangeTypeLedgerEntryState, State: &pre},
+		{Type: xdr.LedgerEntryChangeTypeLedgerEntryRemoved, Removed: &key},
+	}
+}
+
+func metaV3WithChanges(changes []xdr.LedgerEntryChange) xdr.TransactionMeta {
+	return xdr.TransactionMeta{
+		V: 3,
+		V3: &xdr.TransactionMetaV3{
+			Operations:  []xdr.OperationMeta{{Changes: changes}},
+			SorobanMeta: &xdr.SorobanTransactionMeta{},
+		},
+	}
+}
+
+// watchingKinds builds a snapshot with explicit kinds.
+func watchingKinds(t *testing.T, id string, kinds ...string) *registry.Snapshot {
+	t.Helper()
+	reg := registry.New("testnet", staticLister([]store.Contract{{
+		Network: "testnet", ContractID: id, Kinds: kinds,
+	}}))
+	if err := reg.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	return reg.Snapshot()
+}
+
+func TestStateChangesExtracted(t *testing.T) {
+	old := dataEntry(t, watchedID, "balance", 10, xdr.ContractDataDurabilityPersistent)
+	upd := dataEntry(t, watchedID, "balance", 20, xdr.ContractDataDurabilityPersistent)
+	tmp := dataEntry(t, watchedID, "nonce", 1, xdr.ContractDataDurabilityTemporary)
+
+	var changes []xdr.LedgerEntryChange
+	changes = append(changes, changeCreated(tmp)...)
+	changes = append(changes, changeUpdated(old, upd)...)
+	changes = append(changes, changeRemoved(t, upd)...)
+
+	lcm := buildLCM(t, fixtureTx{
+		envelope: sorobanEnvelope(t, 1),
+		success:  true,
+		meta:     metaV3WithChanges(changes),
+	})
+
+	res, err := Events(lcm, passphrase, watchingKinds(t, watchedID, store.KindEvents, store.KindState))
+	if err != nil {
+		t.Fatalf("Events() error = %v", err)
+	}
+	if len(res.StateChanges) != 3 {
+		t.Fatalf("state changes = %d, want 3", len(res.StateChanges))
+	}
+	created, updated, removed := res.StateChanges[0], res.StateChanges[1], res.StateChanges[2]
+	if created.ChangeType != "created" || created.Durability != "temporary" || created.PostXDR == "" || created.PreXDR != "" {
+		t.Errorf("created = %+v", created)
+	}
+	if updated.ChangeType != "updated" || updated.PreXDR == "" || updated.PostXDR == "" || updated.PreXDR == updated.PostXDR {
+		t.Errorf("updated = %+v", updated)
+	}
+	if removed.ChangeType != "removed" || removed.PostXDR == "" == false {
+		t.Errorf("removed = %+v", removed)
+	}
+	if removed.PostXDR != "" {
+		t.Errorf("removed change must have no post value: %+v", removed)
+	}
+	if created.KeyXDR == "" || updated.KeyXDR == "" || removed.KeyXDR == "" {
+		t.Error("every change must carry its key")
+	}
+	if updated.KeyXDR != removed.KeyXDR {
+		t.Error("update and remove of the same entry must share the key")
+	}
+	// Ids are unique and ordered within the transaction.
+	if !(created.ID < updated.ID && updated.ID < removed.ID) {
+		t.Errorf("ids not ordered: %s %s %s", created.ID, updated.ID, removed.ID)
+	}
+}
+
+func TestStateRespectsKind(t *testing.T) {
+	entry := dataEntry(t, watchedID, "balance", 10, xdr.ContractDataDurabilityPersistent)
+	lcm := buildLCM(t, fixtureTx{
+		envelope: sorobanEnvelope(t, 1),
+		success:  true,
+		meta:     metaV3WithChanges(changeCreated(entry)),
+	})
+
+	// Watched for events only: no state derived (D1).
+	res, err := Events(lcm, passphrase, watchingKinds(t, watchedID, store.KindEvents))
+	if err != nil {
+		t.Fatalf("Events() error = %v", err)
+	}
+	if len(res.StateChanges) != 0 {
+		t.Errorf("state derived without the state kind: %d", len(res.StateChanges))
+	}
+
+	// Watched for state only: changes derived, no events required.
+	res, err = Events(lcm, passphrase, watchingKinds(t, watchedID, store.KindState))
+	if err != nil {
+		t.Fatalf("Events() error = %v", err)
+	}
+	if len(res.StateChanges) != 1 {
+		t.Errorf("state changes = %d, want 1", len(res.StateChanges))
+	}
+}
+
+func TestStateIgnoresUnwatchedAndFailedTx(t *testing.T) {
+	other := "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+	unwatched := dataEntry(t, other, "balance", 10, xdr.ContractDataDurabilityPersistent)
+	watched := dataEntry(t, watchedID, "balance", 10, xdr.ContractDataDurabilityPersistent)
+
+	lcm := buildLCM(t,
+		fixtureTx{
+			envelope: sorobanEnvelope(t, 1),
+			success:  true,
+			meta:     metaV3WithChanges(changeCreated(unwatched)),
+		},
+		fixtureTx{
+			envelope: sorobanEnvelope(t, 2),
+			success:  false,
+			meta:     metaV3WithChanges(changeCreated(watched)),
+		},
+	)
+	res, err := Events(lcm, passphrase, watchingKinds(t, watchedID, store.KindState))
+	if err != nil {
+		t.Fatalf("Events() error = %v", err)
+	}
+	if len(res.StateChanges) != 0 {
+		t.Errorf("state changes = %d, want 0 (unwatched or failed)", len(res.StateChanges))
+	}
+	if res.FailedTxs != 1 {
+		t.Errorf("failed txs = %d, want 1", res.FailedTxs)
+	}
+}

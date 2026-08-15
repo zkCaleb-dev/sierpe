@@ -26,6 +26,7 @@ type Metrics struct {
 	CommitSeconds    prometheus.Histogram
 	OpenGaps         prometheus.Gauge
 	EventsExtracted  prometheus.Counter
+	StateChanges     prometheus.Counter
 	FailedTxs        prometheus.Counter
 	SuppressedTxs    prometheus.Counter
 	SuppressedEvents prometheus.Counter
@@ -65,6 +66,10 @@ func NewMetrics() *Metrics {
 		EventsExtracted: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_events_extracted_total",
 			Help: "Events from watched contracts committed to the store.",
+		}),
+		StateChanges: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_state_changes_extracted_total",
+			Help: "Contract-data changes from watched contracts committed to the store.",
 		}),
 		FailedTxs: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_failed_txs_skipped_total",
@@ -108,6 +113,10 @@ func (m *Metrics) ObserveCommit(d time.Duration) { m.CommitSeconds.Observe(d.Sec
 
 // IncEventsExtracted counts events committed for watched contracts.
 func (m *Metrics) IncEventsExtracted(n int) { m.EventsExtracted.Add(float64(n)) }
+
+// IncStateChangesExtracted counts state changes committed for watched
+// contracts.
+func (m *Metrics) IncStateChangesExtracted(n int) { m.StateChanges.Add(float64(n)) }
 
 // IncFailedTxs counts failed transactions skipped by extraction.
 func (m *Metrics) IncFailedTxs(n int) { m.FailedTxs.Add(float64(n)) }

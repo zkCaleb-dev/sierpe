@@ -174,8 +174,8 @@ func TestRegisterContract(t *testing.T) {
 	if got.ContractID != validContract || got.Network != "testnet" || got.Source != store.SourceAPI {
 		t.Errorf("upserted contract = %+v", got)
 	}
-	if len(got.Kinds) != 1 || got.Kinds[0] != store.KindEvents {
-		t.Errorf("kinds must default to [events], got %v", got.Kinds)
+	if len(got.Kinds) != 2 || got.Kinds[0] != store.KindEvents || got.Kinds[1] != store.KindState {
+		t.Errorf("kinds must default to [events state], got %v", got.Kinds)
 	}
 	if reg.calls != 1 {
 		t.Errorf("registry reloads = %d, want 1", reg.calls)

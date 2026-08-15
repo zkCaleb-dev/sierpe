@@ -20,18 +20,19 @@ import (
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
 
-// Result carries the extracted events plus the distrust counters (rule 6:
+// Result carries the extracted records plus the distrust counters (rule 6:
 // everything suppressed is counted, never silently dropped).
 type Result struct {
-	Events []store.Event
+	Events       []store.Event
+	StateChanges []store.StateChange
 	// FailedTxs counts transactions skipped because they did not succeed;
-	// their events never happened. Routine, expected traffic.
+	// their events and state changes never happened. Routine traffic.
 	FailedTxs int
 	// SuppressedTxs counts transactions whose meta could not be read or
 	// panicked mid-decode. Should be zero; nonzero means lost data and is
 	// exposed as a metric worth alerting on.
 	SuppressedTxs int
-	// SuppressedEvents counts individual events dropped because their XDR
+	// SuppressedEvents counts individual records dropped because their XDR
 	// could not be re-encoded. Same alarm semantics as SuppressedTxs.
 	SuppressedEvents int
 }
@@ -65,31 +66,43 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 			res.SuppressedTxs++
 			continue
 		}
-		txEvents(tx, seq, closedAt, watch, &res)
+		processTx(tx, seq, closedAt, watch, &res)
 	}
 	return res, nil
 }
 
-// txEvents appends one transaction's watched events to res. The recover
-// frontier lives here: SDK XDR getters panic on nil unions, and one hostile
-// transaction must cost exactly one transaction (counted), not the ledger.
-func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) {
+// processTx appends one transaction's watched events and state changes to
+// res. The recover frontier lives here: SDK XDR getters panic on nil
+// unions, and one hostile transaction must cost exactly one transaction
+// (counted), not the ledger.
+func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) {
 	defer func() {
 		if r := recover(); r != nil {
 			res.SuppressedTxs++
 		}
 	}()
 
-	// The SDK streams failed transactions too; their events describe things
-	// that did not happen (KNOWLEDGE.md P12).
+	// The SDK streams failed transactions too; their events and state
+	// changes describe things that did not happen (KNOWLEDGE.md P12).
 	if !tx.Successful() {
 		res.FailedTxs++
 		return
 	}
+	eventsOK := txEvents(tx, seq, closedAt, watch, res)
+	stateOK := txStateChanges(tx, seq, closedAt, watch, res)
+	// One broken transaction is one suppression, however many extractors
+	// tripped over it.
+	if !eventsOK || !stateOK {
+		res.SuppressedTxs++
+	}
+}
+
+// txEvents appends the transaction's watched contract events; ok=false
+// means the meta could not be read.
+func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) bool {
 	events, err := tx.GetTransactionEvents()
 	if err != nil {
-		res.SuppressedTxs++
-		return
+		return false
 	}
 
 	txHash := tx.Result.TransactionHash.HexString()
@@ -122,6 +135,121 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 			res.Events = append(res.Events, record)
 		}
 	}
+	return true
+}
+
+// txStateChanges appends the transaction's watched contract-data changes.
+// The change index counts every change in the transaction — before any
+// filtering — so ids stay stable no matter what is derived.
+//
+// Removals here come from the ledger meta itself (an explicit REMOVED
+// change), never derived from an absence, so the mass-absence plausibility
+// guard (P12) does not apply on this path. ok=false means the meta could
+// not be read.
+func txStateChanges(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) bool {
+	changes, err := tx.GetChanges()
+	if err != nil {
+		return false
+	}
+	txHash := tx.Result.TransactionHash.HexString()
+	prefix := toid.New(int32(seq), int32(tx.Index), 0).ToInt64()
+
+	for i, ch := range changes {
+		if ch.Type != xdr.LedgerEntryTypeContractData {
+			continue
+		}
+		entry := ch.Post
+		if entry == nil {
+			entry = ch.Pre
+		}
+		if entry == nil {
+			continue // neither side present: nothing attributable
+		}
+		data, ok := entry.Data.GetContractData()
+		if !ok || data.Contract.ContractId == nil {
+			continue
+		}
+		contractID, err := strkey.Encode(strkey.VersionByteContract, data.Contract.ContractId[:])
+		if err != nil {
+			res.SuppressedEvents++
+			continue
+		}
+		contract, watched := watch.Get(contractID)
+		if !watched || !contract.HasKind(store.KindState) {
+			continue
+		}
+		record, err := buildStateChange(ch, data, contractID, seq, closedAt, txHash, int32(tx.Index), int32(i), prefix)
+		if err != nil {
+			res.SuppressedEvents++
+			continue
+		}
+		res.StateChanges = append(res.StateChanges, record)
+	}
+	return true
+}
+
+// buildStateChange renders one ledger-entry change into a history row.
+func buildStateChange(ch ingest.Change, data xdr.ContractDataEntry, contractID string,
+	seq uint32, closedAt time.Time, txHash string, txIndex, changeIndex int32, prefix int64) (store.StateChange, error) {
+
+	keyXDR, err := xdr.MarshalBase64(data.Key)
+	if err != nil {
+		return store.StateChange{}, fmt.Errorf("extract: encode state key: %w", err)
+	}
+
+	var changeType string
+	switch ch.ChangeType {
+	case xdr.LedgerEntryChangeTypeLedgerEntryCreated:
+		changeType = "created"
+	case xdr.LedgerEntryChangeTypeLedgerEntryUpdated:
+		changeType = "updated"
+	case xdr.LedgerEntryChangeTypeLedgerEntryRemoved:
+		changeType = "removed"
+	case xdr.LedgerEntryChangeTypeLedgerEntryRestored:
+		changeType = "restored"
+	default:
+		return store.StateChange{}, fmt.Errorf("extract: unsupported change type %d", ch.ChangeType)
+	}
+
+	valueOf := func(e *xdr.LedgerEntry) (string, error) {
+		if e == nil {
+			return "", nil
+		}
+		d, ok := e.Data.GetContractData()
+		if !ok {
+			return "", fmt.Errorf("extract: change side lost its contract data")
+		}
+		return xdr.MarshalBase64(d.Val)
+	}
+	pre, err := valueOf(ch.Pre)
+	if err != nil {
+		return store.StateChange{}, err
+	}
+	post, err := valueOf(ch.Post)
+	if err != nil {
+		return store.StateChange{}, err
+	}
+
+	durability := "persistent"
+	if data.Durability == xdr.ContractDataDurabilityTemporary {
+		durability = "temporary"
+	}
+
+	return store.StateChange{
+		ID:             fmt.Sprintf("%019d-%010d", prefix, changeIndex),
+		ContractID:     contractID,
+		LedgerSequence: seq,
+		ClosedAt:       closedAt,
+		TxHash:         txHash,
+		TxIndex:        txIndex,
+		OpIndex:        int32(ch.OperationIndex),
+		ChangeIndex:    changeIndex,
+		ChangeType:     changeType,
+		KeyXDR:         keyXDR,
+		Durability:     durability,
+		PreXDR:         pre,
+		PostXDR:        post,
+	}, nil
 }
 
 // buildEvent renders one ContractEvent into the canonical envelope row (D3).
