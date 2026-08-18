@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(gofmt -l *)",
+      "Bash(staticcheck *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git show*)"
+    ],
+    "deny": [
+      "Bash(git tag *)",
+      "Bash(goreleaser release*)",
+      "Bash(gh release *)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}
