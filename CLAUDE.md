@@ -61,6 +61,51 @@ Hard rules:
 12. **Config that lies is a bug**: no dead env vars, secrets redacted in any
     config printout, validation at boot with actionable errors.
 
+## Where the project stands (update this block when it changes)
+
+- **Feature-complete M0–M3, merged on `main`** (2026-08-15): ingestion with
+  hash-chain continuity, registry + classification, backfill with retention
+  wall, events + state APIs (getEvents-v2 compatible), distroless image,
+  compose, Grafana/Gatus configs, goreleaser. All verified live against testnet.
+- **No release tag yet, on purpose.** The first tag freezes module path, image
+  name and API surface; it waits for the final name (`sierpe` is provisional —
+  see `docs/RELEASING.md`). Do not tag.
+- **GitHub Actions is locked** (billing) and the maintainer will not pay for it.
+  The real gate is LOCAL: gofmt, build, vet, `test -race` with a throwaway
+  Postgres, staticcheck. Goreleaser runs manually. Do not propose paying.
+- Roadmap after v1: archive leg (captive core, `-full` image), SAC transfers
+  and trustlines (v1.1). Railway template still needs the maintainer's account.
+
+## Product decisions (do not re-litigate; see DESIGN.md for the why)
+
+- It is a **server** (Postgres/Prometheus category), not a framework and not a
+  fork-and-edit template. If the user has to touch code, the design is wrong.
+- Owns its Postgres schema; consumers read through the API, never the tables.
+- Target user cost < $10/month; volume scales with registered contracts.
+- Pull with cursor is THE delivery (exactly-once); queues/webhooks are v2 on top.
+- Differentiators: redefine "what concerns me" backwards in time (full history
+  even beyond RPC retention), and data honesty (gaps, coverage, scanStatus).
+
+## Decisions taken while building (M1–M3) — behaviour, not accidents
+
+- `DELETE /v1/contracts/:id` keeps indexed data; re-registering resumes.
+- Unreadable spec degrades the contract to `opaque` without failing registration;
+  a contract that does not exist on-chain rejects the POST (404).
+- Coverage is DERIVED from backfill watermark + cursor; there is no coverage table.
+- Registering before any cursor exists → backfill is done-at-birth with a warning.
+- Contracts whose instance is ARCHIVED (TTL expired) 404 on registration — known
+  limit; archived detection + restore is future work.
+- Cursors carry their `kind`; a cursor from `/events` is invalid on `/state`.
+
+## Live RPC traps (both cost a smoke run; both have regression tests)
+
+- `getLatestLedger` may announce a ledger that `getLedgers` does not serve yet.
+  A window error within 64 ledgers of the reported tip is `NotYetAvailable`,
+  never below-retention. Do not "simplify" that classification.
+- A failed tip probe during a window error is transient, not below-retention.
+- A test run leaves a residual cursor in the test database; **truncate everything
+  before a live smoke** or the fresh boot looks like a legitimate below-retention.
+
 ## Verification
 
 - `go build ./... && go vet ./... && go test -race ./...` must pass before any
@@ -75,7 +120,15 @@ Hard rules:
 - Commit messages contain no quotes, apostrophes, or backticks.
 - **No AI co-authorship trailers of any kind** (no Co-Authored-By for Claude
   or any assistant). This is a hard project rule.
-- Branch from `main`; PRs must pass CI.
+- Branch from `main` (fetch first; branch from `origin/main`); land through a
+  GitHub PR + merge. The maintainer merges unless they explicitly delegate it.
+- Definition of done = the local gate above + docs updated (OpenAPI for
+  endpoints, METRICS.md for metrics, CHANGELOG `[Unreleased]` for anything
+  user-visible). Docs are part of done (DESIGN.md §12).
+- The closing package (commit / PR / merge texts) and cross-repo rules come from
+  the `caleb-workflow` plugin (`finish-work`, `workflow-rules`, push-to-main
+  hook) — `github.com/zkCaleb-dev/claude-plugins`. Repo procedures live in
+  `.claude/skills/`: `live-smoke`, `api-surface-change`.
 
 ## Language
 

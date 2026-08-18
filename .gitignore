@@ -42,3 +42,4 @@ go.work.sum
 *.log
 /tmp/
 /scratch/
+.claude/launch.json
