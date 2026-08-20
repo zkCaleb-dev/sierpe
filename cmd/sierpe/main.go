@@ -25,6 +25,7 @@ import (
 	"github.com/zkCaleb-dev/sierpe/internal/api"
 	"github.com/zkCaleb-dev/sierpe/internal/config"
 	"github.com/zkCaleb-dev/sierpe/internal/health"
+	"github.com/zkCaleb-dev/sierpe/internal/httpauth"
 	"github.com/zkCaleb-dev/sierpe/internal/ingest"
 	"github.com/zkCaleb-dev/sierpe/internal/registry"
 	"github.com/zkCaleb-dev/sierpe/internal/source/captive"
@@ -122,9 +123,17 @@ func run(log *slog.Logger, withIngestion bool) error {
 	publicAPI.RegisterTrustlines(mux, st)
 	ui.Register(mux)
 
+	// With HTTP_BASIC_AUTH configured, the whole surface (UI included)
+	// requires credentials — the deployment model for public domains.
+	// Without it, reads stay open: use private networking.
+	var handler http.Handler = mux
+	if cfg.BasicAuthEnabled() {
+		handler = httpauth.Wrap(mux, cfg.BasicAuthUser, cfg.BasicAuthPassword)
+	}
+
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	httpErr := make(chan error, 1)

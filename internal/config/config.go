@@ -81,7 +81,16 @@ type Config struct {
 	// CaptiveStoragePath is where captive core keeps its bucket data.
 	// Contents are disposable (re-downloaded on demand).
 	CaptiveStoragePath string
+	// BasicAuthUser and BasicAuthPassword gate the ENTIRE http surface
+	// (UI included) behind Basic Auth when set, except /health and /ready
+	// which orchestrator probes must reach without credentials. Empty
+	// means the open-reads model: use it behind private networking.
+	BasicAuthUser     string
+	BasicAuthPassword string
 }
+
+// BasicAuthEnabled reports whether the whole-surface gate is configured.
+func (c *Config) BasicAuthEnabled() bool { return c.BasicAuthUser != "" }
 
 // ArchiveEnabled reports whether the archive leg is configured.
 func (c *Config) ArchiveEnabled() bool { return c.CoreBinary != "" }
@@ -184,6 +193,18 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 		cfg.CaptiveStoragePath = p
 	}
 
+	if raw, ok := lookup("HTTP_BASIC_AUTH"); ok && raw != "" {
+		user, pass, found := strings.Cut(raw, ":")
+		switch {
+		case !found || user == "" || pass == "":
+			errs = append(errs, "HTTP_BASIC_AUTH must be user:password (both non-empty)")
+		case len(pass) < 12:
+			errs = append(errs, "HTTP_BASIC_AUTH password is too short (min 12 chars; it gates the whole surface)")
+		default:
+			cfg.BasicAuthUser, cfg.BasicAuthPassword = user, pass
+		}
+	}
+
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(errs, "\n  - "))
 	}
@@ -248,8 +269,12 @@ func (c *Config) Redacted() string {
 		}
 		archive = fmt.Sprintf("core=%s archives=[%s]", c.CoreBinary, strings.Join(archiveHosts, " "))
 	}
+	basicAuth := "off"
+	if c.BasicAuthEnabled() {
+		basicAuth = "on"
+	}
 	return fmt.Sprintf(
-		"network=%s database=%s rpc=[%s] http_port=%d start_ledger=%d archive=%s admin_token=<set>",
-		c.Network, db, strings.Join(hosts, " "), c.HTTPPort, c.StartLedger, archive,
+		"network=%s database=%s rpc=[%s] http_port=%d start_ledger=%d archive=%s basic_auth=%s admin_token=<set>",
+		c.Network, db, strings.Join(hosts, " "), c.HTTPPort, c.StartLedger, archive, basicAuth,
 	)
 }
