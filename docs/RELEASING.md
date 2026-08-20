@@ -21,14 +21,25 @@ git push origin vX.Y.Z
 goreleaser release --clean   # builds static binaries, drafts the GitHub release
 ```
 
-Build and push the image (until CI does it):
+Build and push the images (until CI does it). The slim image MUST be
+built with buildx as multi-platform: a plain `docker build` produces an
+image for the build host's architecture only, and an arm64-only image
+fails to pull on every amd64 platform — this bricked the first Railway
+deployment (found live 2026-08-20). The `-full` variant stays amd64-only
+because SDF ships stellar-core for amd64 exclusively.
 
 ```bash
-docker build -t ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z --build-arg VERSION=vX.Y.Z .
-docker push ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z --build-arg VERSION=vX.Y.Z --push .
 docker build -f Dockerfile.full --platform linux/amd64 \
   -t ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z-full --build-arg VERSION=vX.Y.Z .
 docker push ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z-full
+```
+
+Verify both architectures landed before announcing anything:
+
+```bash
+docker manifest inspect ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z | grep architecture
 ```
 
 ## Verify before publishing the draft
