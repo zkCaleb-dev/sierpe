@@ -6,8 +6,11 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-First feature-complete cut of the appliance (milestones M0 to M3): the
-release tag is pending the final project name.
+Nothing yet.
+
+## [1.0.0] - 2026-08-20
+
+First feature-complete cut of the appliance (milestones M0 to M3).
 
 ### Added
 

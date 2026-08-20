@@ -67,9 +67,10 @@ Hard rules:
   hash-chain continuity, registry + classification, backfill with retention
   wall, events + state APIs (getEvents-v2 compatible), distroless image,
   compose, Grafana/Gatus configs, goreleaser. All verified live against testnet.
-- **No release tag yet, on purpose.** The first tag freezes module path, image
-  name and API surface; it waits for the final name (`sierpe` is provisional —
-  see `docs/RELEASING.md`). Do not tag.
+- **v1.0.0 released (2026-08-20) under the final name `sierpe`.** The tag
+  froze the module path (`github.com/zkCaleb-dev/sierpe`), the image name
+  (`ghcr.io/zkcaleb-dev/sierpe`) and the v1 API surface. Releases follow
+  `docs/RELEASING.md` (manual goreleaser + docker push).
 - **GitHub Actions is locked** (billing) and the maintainer will not pay for it.
   The real gate is LOCAL: gofmt, build, vet, `test -race` with a throwaway
   Postgres, staticcheck. Goreleaser runs manually. Do not propose paying.
