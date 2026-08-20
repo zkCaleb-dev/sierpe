@@ -1,6 +1,6 @@
 # Sierpe
 
-> **Status: v1.1.0.** The design is stable
+> **Status: v1.2.0.** The design is stable
 > ([docs/DESIGN.md](docs/DESIGN.md)) and the v1 surface (events + contract
 > state) is feature-complete and verified live against testnet. Expect
 > pre-1.x-maturity rough edges; issues and feedback are welcome.
@@ -104,7 +104,7 @@ are documented in [docs/METRICS.md](docs/METRICS.md).
 | M2 ✅ | Contract state: change history + current snapshot |
 | M3 ✅ | Appliance polish: container, compose, Grafana dashboard, status page, docs — released as v1.0.0 |
 | v1.1 ✅ | Token transfers (SEP-41 decode, CAP-67 muxed) and classic trustlines of SAC assets |
-| v1.2 | Archive replay: history below RPC retention (captive core, `-full` image) |
+| v1.2 ✅ | Archive replay: history below RPC retention healed from the public archives (`-full` image) |
 | v2 | Push delivery: signed webhooks, broker sinks, management UI |
 
 ## License
