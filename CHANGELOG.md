@@ -6,6 +6,10 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.4.0] - 2026-08-20
+
 ### Added
 
 - Optional whole-surface Basic Auth (`HTTP_BASIC_AUTH=user:password`):
