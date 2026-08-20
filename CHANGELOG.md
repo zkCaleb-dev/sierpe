@@ -6,7 +6,11 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `GET /v1/contracts`: list every registration with its classification
+  and kinds, so consumers (and the new UI) can enumerate what the
+  instance watches without knowing ids upfront.
 
 ## [1.2.0] - 2026-08-20
 
