@@ -169,10 +169,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, k := range req.Kinds {
-		if k != store.KindEvents && k != store.KindState && k != store.KindTransfers {
+		switch k {
+		case store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines:
+		default:
 			writeError(w, http.StatusBadRequest,
-				fmt.Sprintf("kind %q is not supported (supported: %s, %s, %s)",
-					k, store.KindEvents, store.KindState, store.KindTransfers))
+				fmt.Sprintf("kind %q is not supported (supported: %s, %s, %s, %s)",
+					k, store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines))
 			return
 		}
 	}

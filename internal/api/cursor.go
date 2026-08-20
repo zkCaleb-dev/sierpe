@@ -45,10 +45,72 @@ func encodeCursor(network string, q store.EventQuery, afterID string) string {
 // history cursor resumes a change-id walk. Encoded in the payload so a
 // cursor can never be replayed against the wrong endpoint.
 const (
-	kindSnapshot  = "state"
-	kindHistory   = "state_history"
-	kindTransfers = "transfers"
+	kindSnapshot         = "state"
+	kindHistory          = "state_history"
+	kindTransfers        = "transfers"
+	kindTrustlines       = "trustlines"
+	kindTrustlineHistory = "trustlines_history"
 )
+
+// trustlinesCursorPayload is the opaque cursor for both trustline endpoints.
+type trustlinesCursorPayload struct {
+	V            int    `json:"v"`
+	Kind         string `json:"k"`
+	Network      string `json:"n"`
+	ContractID   string `json:"c"`
+	AccountID    string `json:"acc,omitempty"`
+	FromLedger   uint32 `json:"f,omitempty"`
+	ToLedger     uint32 `json:"e,omitempty"`
+	Limit        int    `json:"l"`
+	AfterID      string `json:"a,omitempty"`
+	AfterAccount string `json:"aa,omitempty"`
+}
+
+func encodeTrustlinesCursor(network, kind string, q store.TrustlineQuery) string {
+	payload := trustlinesCursorPayload{
+		V:            cursorVersion,
+		Kind:         kind,
+		Network:      network,
+		ContractID:   q.ContractID,
+		AccountID:    q.AccountID,
+		FromLedger:   q.FromLedger,
+		ToLedger:     q.ToLedger,
+		Limit:        q.Limit,
+		AfterID:      q.AfterID,
+		AfterAccount: q.AfterAccount,
+	}
+	raw, _ := json.Marshal(payload) // fixed shape; cannot fail
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeTrustlinesCursor(network, contractID, kind, cursor string) (store.TrustlineQuery, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return store.TrustlineQuery{}, fmt.Errorf("cursor is not valid: %w", err)
+	}
+	var p trustlinesCursorPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return store.TrustlineQuery{}, fmt.Errorf("cursor is not valid: %w", err)
+	}
+	if p.V != cursorVersion {
+		return store.TrustlineQuery{}, fmt.Errorf("cursor version %d is not supported", p.V)
+	}
+	if p.Kind != kind {
+		return store.TrustlineQuery{}, fmt.Errorf("cursor belongs to a different endpoint")
+	}
+	if p.Network != network || p.ContractID != contractID {
+		return store.TrustlineQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
+	}
+	return store.TrustlineQuery{
+		ContractID:   p.ContractID,
+		AccountID:    p.AccountID,
+		FromLedger:   p.FromLedger,
+		ToLedger:     p.ToLedger,
+		Limit:        p.Limit,
+		AfterID:      p.AfterID,
+		AfterAccount: p.AfterAccount,
+	}, nil
+}
 
 // transfersCursorPayload is the opaque cursor for the transfers endpoint.
 type transfersCursorPayload struct {

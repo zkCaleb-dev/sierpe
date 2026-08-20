@@ -48,7 +48,7 @@ type ledgerSource interface {
 // cursorStore is the slice of the store the loop needs.
 type cursorStore interface {
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
-	CommitLedger(ctx context.Context, network string, rec store.LedgerRecord, events []store.Event, states []store.StateChange, transfers []store.Transfer) error
+	CommitLedger(ctx context.Context, network string, rec store.LedgerRecord, events []store.Event, states []store.StateChange, transfers []store.Transfer, trustlines []store.TrustlineChange) error
 }
 
 // snapshotter hands the loop the current watched-contracts view. Reading it
@@ -71,10 +71,12 @@ type instruments interface {
 	IncEventsExtracted(n int)
 	IncStateChangesExtracted(n int)
 	IncTransfersExtracted(n int)
+	IncTrustlineChangesExtracted(n int)
 	IncFailedTxs(n int)
 	IncSuppressedTxs(n int)
 	IncSuppressedEvents(n int)
 	IncSuppressedTransfers(n int)
+	IncSuppressedTrustlines(n int)
 }
 
 // Config parameterizes a Loop.
@@ -180,10 +182,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.inst.IncSuppressedTxs(extracted.SuppressedTxs)
 		l.inst.IncSuppressedEvents(extracted.SuppressedEvents)
 		l.inst.IncSuppressedTransfers(extracted.SuppressedTransfers)
-		if extracted.SuppressedTxs > 0 || extracted.SuppressedEvents > 0 || extracted.SuppressedTransfers > 0 {
+		l.inst.IncSuppressedTrustlines(extracted.SuppressedTrustlines)
+		if extracted.SuppressedTxs > 0 || extracted.SuppressedEvents > 0 ||
+			extracted.SuppressedTransfers > 0 || extracted.SuppressedTrustlines > 0 {
 			l.log.Warn("suppressed unreadable chain data",
 				"ledger", next, "txs", extracted.SuppressedTxs, "events", extracted.SuppressedEvents,
-				"transfers", extracted.SuppressedTransfers)
+				"transfers", extracted.SuppressedTransfers, "trustlines", extracted.SuppressedTrustlines)
 		}
 
 		start := time.Now()
@@ -193,7 +197,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			PreviousHash: info.PreviousHash,
 			ClosedAt:     info.ClosedAt,
 		}
-		if err := l.store.CommitLedger(ctx, l.cfg.Network, rec, extracted.Events, extracted.StateChanges, extracted.Transfers); err != nil {
+		if err := l.store.CommitLedger(ctx, l.cfg.Network, rec, extracted.Events, extracted.StateChanges, extracted.Transfers, extracted.TrustlineChanges); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -209,6 +213,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.inst.IncEventsExtracted(len(extracted.Events))
 		l.inst.IncStateChangesExtracted(len(extracted.StateChanges))
 		l.inst.IncTransfersExtracted(len(extracted.Transfers))
+		l.inst.IncTrustlineChangesExtracted(len(extracted.TrustlineChanges))
 
 		tipLag := time.Since(info.ClosedAt)
 		l.inst.SetTipLag(tipLag)

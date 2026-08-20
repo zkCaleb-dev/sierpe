@@ -42,6 +42,18 @@ func (s *Snapshot) Get(contractID string) (store.Contract, bool) {
 // Len is the number of watched contracts.
 func (s *Snapshot) Len() int { return len(s.byID) }
 
+// AnyKind reports whether at least one watched contract derives the given
+// kind. Extraction uses it to skip whole scan passes (e.g. hashing every
+// trustline's asset) when nothing registered wants them.
+func (s *Snapshot) AnyKind(kind string) bool {
+	for _, c := range s.byID {
+		if c.HasKind(kind) {
+			return true
+		}
+	}
+	return false
+}
+
 // StaticSnapshot builds a fixed snapshot from explicit contracts. The
 // backfill worker uses it to extract for exactly one registration without
 // touching the live registry.

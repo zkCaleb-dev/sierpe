@@ -23,9 +23,10 @@ import (
 // Result carries the extracted records plus the distrust counters (rule 6:
 // everything suppressed is counted, never silently dropped).
 type Result struct {
-	Events       []store.Event
-	StateChanges []store.StateChange
-	Transfers    []store.Transfer
+	Events           []store.Event
+	StateChanges     []store.StateChange
+	Transfers        []store.Transfer
+	TrustlineChanges []store.TrustlineChange
 	// FailedTxs counts transactions skipped because they did not succeed;
 	// their events and state changes never happened. Routine traffic.
 	FailedTxs int
@@ -41,6 +42,9 @@ type Result struct {
 	// but a nonzero value means the decoder no longer matches what the
 	// network emits, and that is worth alerting on.
 	SuppressedTransfers int
+	// SuppressedTrustlines counts watched trustline changes that could not
+	// be read. Same alarm semantics as SuppressedEvents.
+	SuppressedTrustlines int
 }
 
 // Events extracts every event emitted by watched contracts in one ledger.
@@ -61,6 +65,13 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 	seq := uint32(header.LedgerSeq)
 	closedAt := time.Unix(int64(header.ScpValue.CloseTime), 0).UTC()
 
+	// The asset cache and the wanted check live at ledger scope: when no
+	// registration derives trustlines, the trustline pass costs nothing.
+	var assets *assetContracts
+	if watch.AnyKind(store.KindTrustlines) {
+		assets = newAssetContracts(passphrase)
+	}
+
 	for {
 		tx, err := reader.Read()
 		if errors.Is(err, io.EOF) {
@@ -72,7 +83,7 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 			res.SuppressedTxs++
 			continue
 		}
-		processTx(tx, seq, closedAt, watch, &res)
+		processTx(tx, seq, closedAt, watch, assets, &res)
 	}
 	return res, nil
 }
@@ -81,7 +92,7 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 // res. The recover frontier lives here: SDK XDR getters panic on nil
 // unions, and one hostile transaction must cost exactly one transaction
 // (counted), not the ledger.
-func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) {
+func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, assets *assetContracts, res *Result) {
 	defer func() {
 		if r := recover(); r != nil {
 			res.SuppressedTxs++
@@ -95,7 +106,7 @@ func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watc
 		return
 	}
 	eventsOK := txEvents(tx, seq, closedAt, watch, res)
-	stateOK := txStateChanges(tx, seq, closedAt, watch, res)
+	stateOK := txLedgerChanges(tx, seq, closedAt, watch, assets, res)
 	// One broken transaction is one suppression, however many extractors
 	// tripped over it.
 	if !eventsOK || !stateOK {
@@ -166,7 +177,8 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 	return true
 }
 
-// txStateChanges appends the transaction's watched contract-data changes.
+// txLedgerChanges appends the transaction's watched contract-data changes
+// and, when any registration wants them, its watched trustline changes.
 // The change index counts every change in the transaction — before any
 // filtering — so ids stay stable no matter what is derived.
 //
@@ -174,7 +186,7 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 // change), never derived from an absence, so the mass-absence plausibility
 // guard (P12) does not apply on this path. ok=false means the meta could
 // not be read.
-func txStateChanges(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) bool {
+func txLedgerChanges(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, assets *assetContracts, res *Result) bool {
 	changes, err := tx.GetChanges()
 	if err != nil {
 		return false
@@ -183,37 +195,84 @@ func txStateChanges(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time,
 	prefix := toid.New(int32(seq), int32(tx.Index), 0).ToInt64()
 
 	for i, ch := range changes {
-		if ch.Type != xdr.LedgerEntryTypeContractData {
-			continue
+		switch ch.Type {
+		case xdr.LedgerEntryTypeContractData:
+			stateChange(ch, seq, closedAt, txHash, int32(tx.Index), int32(i), prefix, watch, res)
+		case xdr.LedgerEntryTypeTrustline:
+			if assets != nil {
+				trustline(ch, seq, closedAt, txHash, int32(tx.Index), int32(i), prefix, watch, assets, res)
+			}
 		}
-		entry := ch.Post
-		if entry == nil {
-			entry = ch.Pre
-		}
-		if entry == nil {
-			continue // neither side present: nothing attributable
-		}
-		data, ok := entry.Data.GetContractData()
-		if !ok || data.Contract.ContractId == nil {
-			continue
-		}
-		contractID, err := strkey.Encode(strkey.VersionByteContract, data.Contract.ContractId[:])
-		if err != nil {
-			res.SuppressedEvents++
-			continue
-		}
-		contract, watched := watch.Get(contractID)
-		if !watched || !contract.HasKind(store.KindState) {
-			continue
-		}
-		record, err := buildStateChange(ch, data, contractID, seq, closedAt, txHash, int32(tx.Index), int32(i), prefix)
-		if err != nil {
-			res.SuppressedEvents++
-			continue
-		}
-		res.StateChanges = append(res.StateChanges, record)
 	}
 	return true
+}
+
+// stateChange derives one watched contract-data change into res.
+func stateChange(ch ingest.Change, seq uint32, closedAt time.Time, txHash string,
+	txIndex, changeIndex int32, prefix int64, watch *registry.Snapshot, res *Result) {
+
+	entry := ch.Post
+	if entry == nil {
+		entry = ch.Pre
+	}
+	if entry == nil {
+		return // neither side present: nothing attributable
+	}
+	data, ok := entry.Data.GetContractData()
+	if !ok || data.Contract.ContractId == nil {
+		return
+	}
+	contractID, err := strkey.Encode(strkey.VersionByteContract, data.Contract.ContractId[:])
+	if err != nil {
+		res.SuppressedEvents++
+		return
+	}
+	contract, watched := watch.Get(contractID)
+	if !watched || !contract.HasKind(store.KindState) {
+		return
+	}
+	record, err := buildStateChange(ch, data, contractID, seq, closedAt, txHash, txIndex, changeIndex, prefix)
+	if err != nil {
+		res.SuppressedEvents++
+		return
+	}
+	res.StateChanges = append(res.StateChanges, record)
+}
+
+// trustline derives one classic trustline change when the SAC wrapping its
+// asset is watched with the trustlines kind. Pool-share trustlines have no
+// SAC and are skipped.
+func trustline(ch ingest.Change, seq uint32, closedAt time.Time, txHash string,
+	txIndex, changeIndex int32, prefix int64, watch *registry.Snapshot, assets *assetContracts, res *Result) {
+
+	entry := ch.Post
+	if entry == nil {
+		entry = ch.Pre
+	}
+	if entry == nil {
+		return
+	}
+	tl, ok := entry.Data.GetTrustLine()
+	if !ok || tl.Asset.Type == xdr.AssetTypeAssetTypePoolShare {
+		return
+	}
+	asset := tl.Asset.ToAsset()
+	contractID, err := assets.contractIDFor(asset)
+	if err != nil {
+		res.SuppressedTrustlines++
+		return
+	}
+	contract, watched := watch.Get(contractID)
+	if !watched || !contract.HasKind(store.KindTrustlines) {
+		return
+	}
+	record, err := buildTrustlineChange(ch, tl, contractID, asset.StringCanonical(),
+		seq, closedAt, txHash, txIndex, changeIndex, prefix)
+	if err != nil {
+		res.SuppressedTrustlines++
+		return
+	}
+	res.TrustlineChanges = append(res.TrustlineChanges, record)
 }
 
 // buildStateChange renders one ledger-entry change into a history row.

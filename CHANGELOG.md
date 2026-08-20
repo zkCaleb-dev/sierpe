@@ -20,6 +20,13 @@ All notable changes to Sierpe are documented here. The format follows
   `account`/`from`/`to`/`type` and ledger-bound filters, opaque full-query
   cursors bound to the endpoint, scanStatus and declared coverage — the
   same honesty contract as the events endpoint.
+- Classic trustlines (`trustlines` kind, opt-in): trustline changes of the
+  asset a SAC wraps are attributed to that SAC (the contract id is derived
+  locally — zero extra RPC), stored as full history plus a
+  convergence-safe holder snapshot with tombstones, and served at
+  `GET /v1/contracts/:id/trustlines` (live holders) and
+  `/trustlines/history` (chain-order changes with before/after balances).
+  Native XLM has no trustlines; the kind observes issued assets only.
 
 ## [1.0.0] - 2026-08-20
 
