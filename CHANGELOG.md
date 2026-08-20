@@ -6,7 +6,13 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- The embedded UI went blank when the page was opened through a URL with
+  embedded credentials (https://user:pass@host/): relative fetch URLs
+  inherit the document credentials and the Fetch spec rejects them. API
+  paths now resolve against location.origin, which never carries
+  credentials. Found by the first real user.
 
 ## [1.4.1] - 2026-08-20
 
