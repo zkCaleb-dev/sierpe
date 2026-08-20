@@ -16,6 +16,10 @@ All notable changes to Sierpe are documented here. The format follows
   movement event that fails to decode is counted
   (`sierpe_suppressed_transfers_total`, alertable) while its raw event row
   still lands.
+- `GET /v1/contracts/:id/transfers`: decoded movements in chain order with
+  `account`/`from`/`to`/`type` and ledger-bound filters, opaque full-query
+  cursors bound to the endpoint, scanStatus and declared coverage — the
+  same honesty contract as the events endpoint.
 
 ## [1.0.0] - 2026-08-20
 

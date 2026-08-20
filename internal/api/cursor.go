@@ -45,9 +45,76 @@ func encodeCursor(network string, q store.EventQuery, afterID string) string {
 // history cursor resumes a change-id walk. Encoded in the payload so a
 // cursor can never be replayed against the wrong endpoint.
 const (
-	kindSnapshot = "state"
-	kindHistory  = "state_history"
+	kindSnapshot  = "state"
+	kindHistory   = "state_history"
+	kindTransfers = "transfers"
 )
+
+// transfersCursorPayload is the opaque cursor for the transfers endpoint.
+type transfersCursorPayload struct {
+	V            int    `json:"v"`
+	Kind         string `json:"k"`
+	Network      string `json:"n"`
+	ContractID   string `json:"c"`
+	Account      string `json:"acc,omitempty"`
+	From         string `json:"from,omitempty"`
+	To           string `json:"to,omitempty"`
+	TransferType string `json:"tt,omitempty"`
+	FromLedger   uint32 `json:"f,omitempty"`
+	ToLedger     uint32 `json:"e,omitempty"`
+	Limit        int    `json:"l"`
+	AfterID      string `json:"a,omitempty"`
+}
+
+func encodeTransfersCursor(network string, q store.TransferQuery) string {
+	payload := transfersCursorPayload{
+		V:            cursorVersion,
+		Kind:         kindTransfers,
+		Network:      network,
+		ContractID:   q.ContractID,
+		Account:      q.Account,
+		From:         q.From,
+		To:           q.To,
+		TransferType: q.TransferType,
+		FromLedger:   q.FromLedger,
+		ToLedger:     q.ToLedger,
+		Limit:        q.Limit,
+		AfterID:      q.AfterID,
+	}
+	raw, _ := json.Marshal(payload) // fixed shape; cannot fail
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeTransfersCursor(network, contractID, cursor string) (store.TransferQuery, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return store.TransferQuery{}, fmt.Errorf("cursor is not valid: %w", err)
+	}
+	var p transfersCursorPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return store.TransferQuery{}, fmt.Errorf("cursor is not valid: %w", err)
+	}
+	if p.V != cursorVersion {
+		return store.TransferQuery{}, fmt.Errorf("cursor version %d is not supported", p.V)
+	}
+	if p.Kind != kindTransfers {
+		return store.TransferQuery{}, fmt.Errorf("cursor belongs to a different endpoint")
+	}
+	if p.Network != network || p.ContractID != contractID {
+		return store.TransferQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
+	}
+	return store.TransferQuery{
+		ContractID:   p.ContractID,
+		Account:      p.Account,
+		From:         p.From,
+		To:           p.To,
+		TransferType: p.TransferType,
+		FromLedger:   p.FromLedger,
+		ToLedger:     p.ToLedger,
+		Limit:        p.Limit,
+		AfterID:      p.AfterID,
+	}, nil
+}
 
 // stateCursorPayload is the opaque cursor for both state endpoints.
 type stateCursorPayload struct {
