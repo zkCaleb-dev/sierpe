@@ -6,6 +6,10 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.4.1] - 2026-08-20
+
 ### Fixed
 
 - With `HTTP_BASIC_AUTH` enabled, admin mutations were impossible: the
