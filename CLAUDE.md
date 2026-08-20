@@ -79,8 +79,15 @@ Hard rules:
 - **GitHub Actions is locked** (billing) and the maintainer will not pay for it.
   The real gate is LOCAL: gofmt, build, vet, `test -race` with a throwaway
   Postgres, staticcheck. Goreleaser runs manually. Do not propose paying.
-- Roadmap: archive leg (captive core, `-full` image) is v1.2. Railway
-  template still needs the maintainer's account.
+- **v1.2.0 released (2026-08-20): the archive leg.** Recorded
+  below-retention gaps heal from the public history archives through a
+  captive stellar-core (`-full` image, linux/amd64), gated by a
+  byte-equivalence proof against the RPC (after normalizing diagnostic
+  events and change-unit ordering — both unstable run to run even on the
+  same core build). Verified end to end on testnet.
+- Roadmap: v1.x batch state query, getEvents v2 facade; v2 push delivery
+  and management UI. Railway template still needs the maintainer's
+  account.
 
 ## Product decisions (do not re-litigate; see DESIGN.md for the why)
 

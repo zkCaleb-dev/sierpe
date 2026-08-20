@@ -6,6 +6,10 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.2.0] - 2026-08-20
+
 ### Added
 
 - Archive leg groundwork: a captive stellar-core replay source
