@@ -6,6 +6,10 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.1.0] - 2026-08-20
+
 ### Added
 
 - Token transfers (`transfers` kind): SEP-41 movement events (transfer,
