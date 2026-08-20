@@ -72,6 +72,21 @@ paths:
         "502":
           description: The chain could not be read to classify; retry later.
 
+  /v1/contracts:
+    get:
+      tags: [public]
+      summary: List registered contracts
+      description: |
+        Every registration on this instance with its classification and
+        kinds; lightweight (no per-contract aggregation — fetch the detail
+        endpoint for coverage and counts). Ordered by registration time.
+      responses:
+        "200":
+          description: The registration list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContractList" }
+
   /v1/contracts/{id}:
     delete:
       tags: [admin]
@@ -430,6 +445,25 @@ components:
           type: string
           enum: [spec_events, function_names, sac_builtin, opaque]
           description: How the events were discovered.
+
+    ContractSummary:
+      type: object
+      properties:
+        contract_id: { type: string }
+        network: { type: string }
+        source: { type: string, enum: [api, config] }
+        kinds:
+          type: array
+          items: { type: string, enum: [events, state, transfers, trustlines] }
+        classification: { type: object }
+        registered_at: { type: string, format: date-time }
+
+    ContractList:
+      type: object
+      properties:
+        contracts:
+          type: array
+          items: { $ref: "#/components/schemas/ContractSummary" }
 
     ContractDetail:
       allOf:

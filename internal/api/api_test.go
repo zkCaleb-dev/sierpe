@@ -53,6 +53,13 @@ func (f *fakeContractReader) GetContract(_ context.Context, _, contractID string
 	return f.contract, nil
 }
 
+func (f *fakeContractReader) ListContracts(context.Context, string) ([]store.Contract, error) {
+	if f.contract.ContractID == "" {
+		return nil, nil
+	}
+	return []store.Contract{f.contract}, nil
+}
+
 func (f *fakeContractReader) GetBackfill(context.Context, string, string) (store.Backfill, error) {
 	if f.backfill.ContractID == "" {
 		return store.Backfill{}, store.ErrNoBackfill
@@ -499,5 +506,26 @@ func TestContractDetailIncludesState(t *testing.T) {
 	}
 	if detail.State.Entries != 7 {
 		t.Errorf("state entries = %d, want 7", detail.State.Entries)
+	}
+}
+
+func TestContractList(t *testing.T) {
+	cr := defaultContractReader()
+	srv := newTestAPI(&fakeEventReader{}, cr)
+	defer srv.Close()
+
+	var resp contractListResponse
+	if code := getJSON(t, srv.URL+"/v1/contracts", &resp); code != 200 {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if len(resp.Contracts) != 1 {
+		t.Fatalf("contracts = %+v, want 1 row", resp.Contracts)
+	}
+	got := resp.Contracts[0]
+	if got.ContractID != registered || got.Network != "testnet" || len(got.Kinds) == 0 {
+		t.Errorf("row = %+v", got)
+	}
+	if got.RegisteredAt == "" {
+		t.Error("registered_at must be set")
 	}
 }

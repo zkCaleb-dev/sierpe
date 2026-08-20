@@ -40,9 +40,10 @@ type eventReader interface {
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
 }
 
-// contractReader is the store slice the contract-detail endpoint consumes.
+// contractReader is the store slice the contract endpoints consume.
 type contractReader interface {
 	GetContract(ctx context.Context, network, contractID string) (store.Contract, error)
+	ListContracts(ctx context.Context, network string) ([]store.Contract, error)
 	GetBackfill(ctx context.Context, network, contractID string) (store.Backfill, error)
 	EventCountsByName(ctx context.Context, network, contractID string) (map[string]int64, error)
 	CountStateEntries(ctx context.Context, network, contractID string) (int64, error)
@@ -63,6 +64,7 @@ func NewServer(network string, events eventReader, contracts contractReader, log
 
 // Register mounts the public routes onto mux.
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/contracts", s.handleContractList)
 	mux.HandleFunc("GET /v1/contracts/{id}", s.handleContract)
 	mux.HandleFunc("GET /v1/contracts/{id}/events", s.handleEvents)
 }
@@ -357,6 +359,42 @@ func (s *Server) handleContract(w http.ResponseWriter, r *http.Request) {
 		State:  contractStateAgg{Entries: stateEntries},
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// contractSummary is one row of the registration listing: identity and
+// classification without the per-contract aggregation queries (fetch the
+// detail endpoint for coverage and counts).
+type contractSummary struct {
+	ContractID     string          `json:"contract_id"`
+	Network        string          `json:"network"`
+	Source         string          `json:"source"`
+	Kinds          []string        `json:"kinds"`
+	Classification json.RawMessage `json:"classification"`
+	RegisteredAt   string          `json:"registered_at"`
+}
+
+type contractListResponse struct {
+	Contracts []contractSummary `json:"contracts"`
+}
+
+func (s *Server) handleContractList(w http.ResponseWriter, r *http.Request) {
+	contracts, err := s.contracts.ListContracts(r.Context(), s.network)
+	if err != nil {
+		s.serverError(w, "contract listing failed", err)
+		return
+	}
+	resp := contractListResponse{Contracts: make([]contractSummary, 0, len(contracts))}
+	for _, c := range contracts {
+		resp.Contracts = append(resp.Contracts, contractSummary{
+			ContractID:     c.ContractID,
+			Network:        c.Network,
+			Source:         c.Source,
+			Kinds:          c.Kinds,
+			Classification: c.Classification,
+			RegisteredAt:   c.RegisteredAt.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // --- plumbing ---------------------------------------------------------------
