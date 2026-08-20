@@ -6,6 +6,10 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.3.0] - 2026-08-20
+
 ### Added
 
 - `GET /v1/contracts`: list every registration with its classification
