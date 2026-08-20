@@ -13,6 +13,7 @@ appliance; pick the one that matches your infrastructure.
 | `RPC_URLS` | mainnet | Comma-separated failover pool of Stellar RPC endpoints, in preference order. Testnet defaults to the public SDF endpoint. |
 | `HTTP_PORT` | no | API port, default 8080. |
 | `START_LEDGER` | no | First ledger for a fresh database (default: current tip). |
+| `HTTP_BASIC_AUTH` | no | `user:password`. When set, the **whole surface** (UI included) requires these credentials; only `/health` and `/ready` stay open for orchestrator probes. Leave unset when the instance lives on private networking. |
 | `STELLAR_CORE_BINARY` | no | Path to a stellar-core binary; enables the archive leg. Pre-set in the `-full` image. |
 | `HISTORY_ARCHIVE_URLS` | no | History archives for the archive leg. Defaults to the SDF public archives. |
 | `CAPTIVE_STORAGE_PATH` | no | Scratch space for captive core buckets (disposable). Defaults to the OS temp dir. |
@@ -25,6 +26,24 @@ Operational truths that apply everywhere:
 - **Crash recovery is the default**: same database means the cursor resumes
   and continuity is verified against the stored hash chain. No manual steps.
 - Your backend consumes the HTTP API. The tables are private to Sierpe.
+
+## Who can reach your instance
+
+Everything Sierpe stores is public chain data, so the question is not
+secrecy — it is who gets to spend YOUR database and bandwidth. Two
+postures, both first-class:
+
+- **Private networking (default)**: do not expose a public domain. Your
+  backend reaches the API over the platform's internal network (on
+  Railway: `http://sierpe.railway.internal:8080`) and nothing else can.
+  This is the RabbitMQ rule of thumb: management surfaces do not face the
+  internet.
+- **Public domain + `HTTP_BASIC_AUTH`**: set `HTTP_BASIC_AUTH=user:password`
+  and every request — the embedded UI, the API, `/metrics` — requires the
+  credentials. Browsers prompt natively; programmatic clients send the
+  standard header (`curl -u user:password …`, Prometheus `basic_auth` in
+  the scrape config). Works from any network. Admin mutations additionally
+  require the `ADMIN_TOKEN` bearer, as always.
 
 ## Docker Compose (local, VPS)
 

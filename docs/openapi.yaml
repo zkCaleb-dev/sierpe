@@ -385,6 +385,14 @@ components:
       type: http
       scheme: bearer
       description: The ADMIN_TOKEN boot configuration value.
+    basicAuth:
+      type: http
+      scheme: basic
+      description: >
+        Only when the instance sets HTTP_BASIC_AUTH: then EVERY path in
+        this document except /health and /ready additionally requires
+        these credentials. Instances on private networking leave it unset
+        and reads stay open.
 
   parameters:
     contractID:

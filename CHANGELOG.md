@@ -6,7 +6,16 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Optional whole-surface Basic Auth (`HTTP_BASIC_AUTH=user:password`):
+  when set, every request — embedded UI, API, `/metrics` — requires the
+  credentials; only `/health` and `/ready` stay open for orchestrator
+  probes. Browsers prompt natively and the UI inherits the credentials
+  with no changes; programmatic clients send the standard header from any
+  network. Unset keeps the open-reads model for private-networking
+  deployments. Constant-time comparison, boot-time validation, redacted
+  from the config printout.
 
 ## [1.3.0] - 2026-08-20
 

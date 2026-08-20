@@ -127,3 +127,40 @@ func TestNetworkPassphrase(t *testing.T) {
 		t.Error("testnet passphrase mismatch")
 	}
 }
+
+func TestLoadBasicAuth(t *testing.T) {
+	m := validEnv()
+	m["HTTP_BASIC_AUTH"] = "operator:correct-horse-battery"
+	cfg, err := Load(env(m))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.BasicAuthEnabled() || cfg.BasicAuthUser != "operator" || cfg.BasicAuthPassword != "correct-horse-battery" {
+		t.Errorf("basic auth = %q/%q enabled=%v", cfg.BasicAuthUser, cfg.BasicAuthPassword, cfg.BasicAuthEnabled())
+	}
+	red := cfg.Redacted()
+	if strings.Contains(red, "correct-horse-battery") || strings.Contains(red, "operator") {
+		t.Errorf("Redacted() leaks credentials: %s", red)
+	}
+	if !strings.Contains(red, "basic_auth=on") {
+		t.Errorf("Redacted() must state basic auth is on: %s", red)
+	}
+
+	delete(m, "HTTP_BASIC_AUTH")
+	cfg, err = Load(env(m))
+	if err != nil || cfg.BasicAuthEnabled() {
+		t.Errorf("basic auth must default off; err = %v", err)
+	}
+
+	for name, bad := range map[string]string{
+		"no separator":   "operatorpassword",
+		"empty user":     ":correct-horse-battery",
+		"empty password": "operator:",
+		"short password": "operator:short",
+	} {
+		m["HTTP_BASIC_AUTH"] = bad
+		if _, err := Load(env(m)); err == nil {
+			t.Errorf("%s (%q) must be rejected", name, bad)
+		}
+	}
+}
