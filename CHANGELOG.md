@@ -6,7 +6,15 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Archive leg groundwork: a captive stellar-core replay source
+  (`internal/source/captive`) serving bounded history-archive ranges with
+  the unified event semantics RPC serves (EMIT_CLASSIC_EVENTS +
+  BACKFILL_STELLAR_ASSET_EVENTS), plus boot configuration
+  (`STELLAR_CORE_BINARY`, `HISTORY_ARCHIVE_URLS`, `CAPTIVE_STORAGE_PATH`)
+  validated at startup. Setting `STELLAR_CORE_BINARY` enables the leg;
+  nothing consumes it yet — the gap healer arrives next.
 
 ## [1.1.0] - 2026-08-20
 

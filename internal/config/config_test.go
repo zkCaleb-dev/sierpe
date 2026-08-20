@@ -34,6 +34,30 @@ func TestLoadValid(t *testing.T) {
 	if len(cfg.RPCURLs) == 0 {
 		t.Error("RPCURLs empty, want testnet default")
 	}
+	if cfg.ArchiveEnabled() {
+		t.Error("archive leg must be off without STELLAR_CORE_BINARY")
+	}
+}
+
+func TestLoadArchiveLeg(t *testing.T) {
+	m := validEnv()
+	m["STELLAR_CORE_BINARY"] = "/bin/ls" // any executable file works for validation
+	cfg, err := Load(env(m))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.ArchiveEnabled() {
+		t.Fatal("archive leg must be on with STELLAR_CORE_BINARY set")
+	}
+	if len(cfg.ArchiveURLs) != 3 {
+		t.Errorf("ArchiveURLs = %v, want the 3 testnet defaults", cfg.ArchiveURLs)
+	}
+	if cfg.CaptiveStoragePath == "" {
+		t.Error("CaptiveStoragePath must default to the OS temp dir")
+	}
+	if !strings.Contains(cfg.Redacted(), "core=/bin/ls") {
+		t.Errorf("Redacted() must show the archive config, got %s", cfg.Redacted())
+	}
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -53,6 +77,14 @@ func TestLoadErrors(t *testing.T) {
 		{"bad rpc url", func(m map[string]string) { m["RPC_URLS"] = "not a url" }, "not a valid http(s) URL"},
 		{"bad port", func(m map[string]string) { m["HTTP_PORT"] = "99999" }, "not a valid port"},
 		{"bad start ledger", func(m map[string]string) { m["START_LEDGER"] = "-4" }, "positive ledger sequence"},
+		{"missing core binary", func(m map[string]string) { m["STELLAR_CORE_BINARY"] = "/no/such/binary" }, "does not exist"},
+		{"core binary is a directory", func(m map[string]string) { m["STELLAR_CORE_BINARY"] = "/tmp" }, "not an executable file"},
+		{"archives without core", func(m map[string]string) { m["HISTORY_ARCHIVE_URLS"] = "https://archives.example.com" }, "STELLAR_CORE_BINARY is not"},
+		{"storage without core", func(m map[string]string) { m["CAPTIVE_STORAGE_PATH"] = "/var/captive" }, "STELLAR_CORE_BINARY is not"},
+		{"bad archive url", func(m map[string]string) {
+			m["STELLAR_CORE_BINARY"] = "/bin/ls"
+			m["HISTORY_ARCHIVE_URLS"] = "not a url"
+		}, "HISTORY_ARCHIVE_URLS entry"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
