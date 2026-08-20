@@ -4,8 +4,8 @@
 
 services:
   sierpe:
-    image: ghcr.io/zkcaleb-dev/sierpe:v1.4.1
-    # image: ghcr.io/zkcaleb-dev/sierpe:v1.4.1-full   # archive leg: heals history below RPC retention (amd64)
+    image: ghcr.io/zkcaleb-dev/sierpe:v1.4.2
+    # image: ghcr.io/zkcaleb-dev/sierpe:v1.4.2-full   # archive leg: heals history below RPC retention (amd64)
     # build: .   # uncomment to build from source instead of pulling the image
     restart: unless-stopped
     depends_on:

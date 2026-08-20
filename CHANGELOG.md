@@ -6,6 +6,10 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.4.2] - 2026-08-20
+
 ### Fixed
 
 - The embedded UI went blank when the page was opened through a URL with
