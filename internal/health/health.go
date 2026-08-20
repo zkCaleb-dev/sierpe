@@ -20,20 +20,22 @@ import (
 // Metrics is Sierpe's Prometheus instrument set. One instance per process.
 // Every metric is documented in docs/METRICS.md; keep both in sync.
 type Metrics struct {
-	LedgersIngested  prometheus.Counter
-	TipLagSeconds    prometheus.Gauge
-	SourceFailovers  prometheus.Counter
-	CommitSeconds    prometheus.Histogram
-	OpenGaps         prometheus.Gauge
-	EventsExtracted  prometheus.Counter
-	StateChanges     prometheus.Counter
-	FailedTxs        prometheus.Counter
-	SuppressedTxs    prometheus.Counter
-	SuppressedEvents prometheus.Counter
-	BackfillChunks   prometheus.Counter
-	BackfillLedgers  prometheus.Counter
-	BackfillPending  prometheus.Gauge
-	registry         *prometheus.Registry
+	LedgersIngested     prometheus.Counter
+	TipLagSeconds       prometheus.Gauge
+	SourceFailovers     prometheus.Counter
+	CommitSeconds       prometheus.Histogram
+	OpenGaps            prometheus.Gauge
+	EventsExtracted     prometheus.Counter
+	StateChanges        prometheus.Counter
+	Transfers           prometheus.Counter
+	FailedTxs           prometheus.Counter
+	SuppressedTxs       prometheus.Counter
+	SuppressedEvents    prometheus.Counter
+	SuppressedTransfers prometheus.Counter
+	BackfillChunks      prometheus.Counter
+	BackfillLedgers     prometheus.Counter
+	BackfillPending     prometheus.Gauge
+	registry            *prometheus.Registry
 }
 
 // NewMetrics builds and registers the instrument set on a private registry
@@ -71,6 +73,10 @@ func NewMetrics() *Metrics {
 			Name: "sierpe_state_changes_extracted_total",
 			Help: "Contract-data changes from watched contracts committed to the store.",
 		}),
+		Transfers: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_transfers_extracted_total",
+			Help: "Token transfers decoded from watched contracts and committed to the store.",
+		}),
 		FailedTxs: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_failed_txs_skipped_total",
 			Help: "Failed transactions skipped during extraction (their events never happened). Routine.",
@@ -82,6 +88,10 @@ func NewMetrics() *Metrics {
 		SuppressedEvents: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_suppressed_events_total",
 			Help: "Events dropped because their XDR could not be re-encoded. Alert if nonzero.",
+		}),
+		SuppressedTransfers: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_suppressed_transfers_total",
+			Help: "Events that named a token movement but did not decode as one; the raw event still lands. Alert if nonzero.",
 		}),
 		BackfillChunks: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_backfill_chunks_total",
@@ -126,6 +136,14 @@ func (m *Metrics) IncSuppressedTxs(n int) { m.SuppressedTxs.Add(float64(n)) }
 
 // IncSuppressedEvents counts events dropped as unencodable.
 func (m *Metrics) IncSuppressedEvents(n int) { m.SuppressedEvents.Add(float64(n)) }
+
+// IncTransfersExtracted counts token transfers committed for watched
+// contracts.
+func (m *Metrics) IncTransfersExtracted(n int) { m.Transfers.Add(float64(n)) }
+
+// IncSuppressedTransfers counts movement-named events that did not decode
+// as transfers.
+func (m *Metrics) IncSuppressedTransfers(n int) { m.SuppressedTransfers.Add(float64(n)) }
 
 // IncBackfillChunks counts one committed backfill chunk.
 func (m *Metrics) IncBackfillChunks() { m.BackfillChunks.Inc() }

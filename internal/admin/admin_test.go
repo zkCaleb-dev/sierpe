@@ -186,6 +186,42 @@ func TestRegisterContract(t *testing.T) {
 	}
 }
 
+func TestRegisterSACDefaultsToTransfers(t *testing.T) {
+	st := &fakeStore{}
+	sac := &fakeClassifier{cls: registry.Classification{
+		Type: registry.TypeSAC, Events: []string{"transfer"}, Method: registry.MethodSACBuiltin,
+	}}
+	srv := newTestServer(st, &fakeReloader{}, sac)
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := st.upserted[0]
+	want := []string{store.KindEvents, store.KindState, store.KindTransfers}
+	if len(got.Kinds) != len(want) || got.Kinds[0] != want[0] || got.Kinds[1] != want[1] || got.Kinds[2] != want[2] {
+		t.Errorf("SAC kinds must default to %v, got %v", want, got.Kinds)
+	}
+}
+
+func TestRegisterExplicitTransfersKindAccepted(t *testing.T) {
+	st := &fakeStore{}
+	srv := newTestServer(st, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`","kinds":["events","transfers"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := st.upserted[0]
+	if len(got.Kinds) != 2 || got.Kinds[1] != store.KindTransfers {
+		t.Errorf("explicit kinds must persist, got %v", got.Kinds)
+	}
+}
+
 func TestRegisterValidation(t *testing.T) {
 	st := &fakeStore{}
 	srv := newTestServer(st, &fakeReloader{}, okClassifier())
@@ -198,7 +234,7 @@ func TestRegisterValidation(t *testing.T) {
 		{"malformed json", `{`},
 		{"invalid strkey", `{"contract_id":"CINVALID"}`},
 		{"account not contract", `{"contract_id":"GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"}`},
-		{"unsupported kind", `{"contract_id":"` + validContract + `","kinds":["transfers"]}`},
+		{"unsupported kind", `{"contract_id":"` + validContract + `","kinds":["balances"]}`},
 		{"unknown field", `{"contract_id":"` + validContract + `","kind":["events"]}`},
 	}
 	for _, tc := range cases {

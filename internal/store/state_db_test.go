@@ -25,7 +25,7 @@ func stateChange(id string, ledger uint32, key, changeType, post string) StateCh
 func commitStates(t *testing.T, s *Store, seq uint32, changes ...StateChange) {
 	t.Helper()
 	rec := LedgerRecord{Sequence: seq, Hash: "h", PreviousHash: "p", ClosedAt: time.Now().UTC()}
-	if err := s.CommitLedger(context.Background(), "testnet", rec, nil, changes); err != nil {
+	if err := s.CommitLedger(context.Background(), "testnet", rec, nil, changes, nil); err != nil {
 		t.Fatalf("CommitLedger(states) error = %v", err)
 	}
 }
@@ -66,7 +66,7 @@ func TestStateSnapshotOrderingGuard(t *testing.T) {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 	old := stateChange("0000000000000000100-0000000000", 100, "kA", "updated", "v100")
-	if err := s.CommitBackfillChunk(context.Background(), "testnet", b, nil, []StateChange{old}); err != nil {
+	if err := s.CommitBackfillChunk(context.Background(), "testnet", b, nil, []StateChange{old}, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestStateTombstoneBlocksStaleResurrection(t *testing.T) {
 	}
 	b := Backfill{ContractID: "CAAA", TargetFrom: 1, NextTo: 99}
 	created := stateChange("0000000000000000100-0000000000", 100, "kA", "created", "v100")
-	if err := s.CommitBackfillChunk(context.Background(), "testnet", b, nil, []StateChange{created}); err != nil {
+	if err := s.CommitBackfillChunk(context.Background(), "testnet", b, nil, []StateChange{created}, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
 	if _, ok := snapshotValue(t, s, "kA"); ok {

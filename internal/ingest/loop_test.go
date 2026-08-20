@@ -84,7 +84,7 @@ func (s *fakeStore) LoadCursor(context.Context, string) (store.Cursor, error) {
 	return *s.cursor, nil
 }
 
-func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange) error {
+func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange, _ []store.Transfer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.committed = append(s.committed, rec)
@@ -114,6 +114,8 @@ func (nopInstruments) IncStateChangesExtracted(int) {}
 func (nopInstruments) IncFailedTxs(int)             {}
 func (nopInstruments) IncSuppressedTxs(int)         {}
 func (nopInstruments) IncSuppressedEvents(int)      {}
+func (nopInstruments) IncTransfersExtracted(int)    {}
+func (nopInstruments) IncSuppressedTransfers(int)   {}
 
 // emptyLister backs a registry that watches nothing; extraction over the
 // fake chain ledgers (which carry no transactions) stays a no-op.
