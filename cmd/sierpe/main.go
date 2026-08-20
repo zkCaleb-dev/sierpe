@@ -128,7 +128,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	// Without it, reads stay open: use private networking.
 	var handler http.Handler = mux
 	if cfg.BasicAuthEnabled() {
-		handler = httpauth.Wrap(mux, cfg.BasicAuthUser, cfg.BasicAuthPassword)
+		handler = httpauth.Wrap(mux, cfg.BasicAuthUser, cfg.BasicAuthPassword, cfg.AdminToken)
 	}
 
 	httpServer := &http.Server{
