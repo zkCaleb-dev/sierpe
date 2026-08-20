@@ -665,3 +665,10 @@ components:
         open_gaps: { type: integer }
         source_failovers: { type: integer }
         pending_backfills: { type: integer }
+        archive:
+          type: string
+          enum: [off, unverified, verified, equivalence_failed]
+          description: >
+            Archive leg state: off (no stellar-core configured), unverified
+            (configured, gate not yet run), verified (heals allowed), or
+            equivalence_failed (healing disabled; gaps stay recorded).
