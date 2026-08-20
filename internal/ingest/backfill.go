@@ -149,7 +149,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 			return fmt.Errorf("locating retention wall: %w", werr)
 		}
 		if err := b.store.RecordGap(ctx, b.network, bf.TargetFrom, wall-1,
-			"below source retention during backfill; the archive leg (v1.1) can heal this"); err != nil {
+			"below source retention during backfill; the archive leg can heal this"); err != nil {
 			return err
 		}
 		next.Done = true

@@ -27,6 +27,7 @@ import (
 	"github.com/zkCaleb-dev/sierpe/internal/health"
 	"github.com/zkCaleb-dev/sierpe/internal/ingest"
 	"github.com/zkCaleb-dev/sierpe/internal/registry"
+	"github.com/zkCaleb-dev/sierpe/internal/source/captive"
 	"github.com/zkCaleb-dev/sierpe/internal/source/rpc"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
@@ -163,6 +164,29 @@ func run(log *slog.Logger, withIngestion bool) error {
 		string(cfg.Network), cfg.Network.Passphrase(), src, st, metrics, log,
 	)
 	go backfiller.Run(ctx)
+
+	// The gap healer replays below-retention history from the archives when
+	// a stellar-core binary is configured; without one, gaps stay recorded.
+	if cfg.ArchiveEnabled() {
+		archive, err := captive.New(captive.Config{
+			BinaryPath:  cfg.CoreBinary,
+			Passphrase:  cfg.Network.Passphrase(),
+			ArchiveURLs: cfg.ArchiveURLs,
+			StoragePath: cfg.CaptiveStoragePath,
+			Log:         log,
+		})
+		if err != nil {
+			return err
+		}
+		healInst := struct {
+			*health.Metrics
+			*health.State
+		}{metrics, state}
+		healer := ingest.NewHealer(
+			string(cfg.Network), cfg.Network.Passphrase(), archive, src, st, reg, healInst, log,
+		)
+		go healer.Run(ctx)
+	}
 
 	loop := ingest.New(
 		ingest.Config{

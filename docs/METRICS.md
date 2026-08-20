@@ -22,6 +22,9 @@ metric does not ship without a row here (CLAUDE.md verification rules).
 | `sierpe_backfill_chunks_total` | counter | Backfill chunks committed since process start. | Stalls while `sierpe_backfill_pending` > 0 = stuck worker. |
 | `sierpe_backfill_ledgers_scanned_total` | counter | Ledgers covered by committed backfill chunks. | Progress rate of history walks. |
 | `sierpe_backfill_pending` | gauge | Registered contracts whose backfill has not finished. | Should drain to 0 after registrations. |
+| `sierpe_gaps_healed_total` | counter | Gaps fully healed from the history archives. | Progress signal for the archive leg. |
+| `sierpe_healed_ledgers_total` | counter | Ledgers replayed from the archives and committed by heals. | Heal throughput. |
+| `sierpe_archive_equivalence_failures_total` | counter | Times the archive leg was refused because the captive replay did not match the RPC byte-for-byte. | **Alert if nonzero** — healing is disabled and gaps stay recorded; the replay configuration needs attention. |
 
 The suppression counters exist because of CLAUDE.md rule 6: a silent guard
 turns an invisible failure into another invisible failure. Anything Sierpe

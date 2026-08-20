@@ -13,8 +13,19 @@ All notable changes to Sierpe are documented here. The format follows
   the unified event semantics RPC serves (EMIT_CLASSIC_EVENTS +
   BACKFILL_STELLAR_ASSET_EVENTS), plus boot configuration
   (`STELLAR_CORE_BINARY`, `HISTORY_ARCHIVE_URLS`, `CAPTIVE_STORAGE_PATH`)
-  validated at startup. Setting `STELLAR_CORE_BINARY` enables the leg;
-  nothing consumes it yet — the gap healer arrives next.
+  validated at startup.
+- Gap healer: with the archive leg enabled, recorded below-retention gaps
+  are walked downward in atomic 2000-ledger chunks replayed from the
+  archives, with a heal watermark on the gap row and the clamped backfill
+  frontiers lowered (and un-clamped) in the same transaction, so declared
+  coverage grows exactly as fast as healed data lands. Before the first
+  heal the captive replay must prove itself **byte-equivalent to the RPC**
+  on a checkpoint-aligned range both can serve; a divergent replay
+  disables healing (`sierpe_archive_equivalence_failures_total`,
+  alertable) instead of filling gaps with unverified data. `/status`
+  reports the leg as `archive: off|unverified|verified|equivalence_failed`,
+  and heals progress through `sierpe_gaps_healed_total` and
+  `sierpe_healed_ledgers_total`.
 
 ## [1.1.0] - 2026-08-20
 

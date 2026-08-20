@@ -37,6 +37,9 @@ type Metrics struct {
 	BackfillChunks       prometheus.Counter
 	BackfillLedgers      prometheus.Counter
 	BackfillPending      prometheus.Gauge
+	GapsHealed           prometheus.Counter
+	HealedLedgers        prometheus.Counter
+	EquivalenceFailures  prometheus.Counter
 	registry             *prometheus.Registry
 }
 
@@ -115,6 +118,18 @@ func NewMetrics() *Metrics {
 			Name: "sierpe_backfill_pending",
 			Help: "Registered contracts whose backfill has not finished.",
 		}),
+		GapsHealed: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_gaps_healed_total",
+			Help: "Gaps fully healed from the history archives.",
+		}),
+		HealedLedgers: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_healed_ledgers_total",
+			Help: "Ledgers replayed from the archives and committed by heals.",
+		}),
+		EquivalenceFailures: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_archive_equivalence_failures_total",
+			Help: "Times the archive leg was refused because the captive replay did not match the RPC byte-for-byte. Alert if nonzero.",
+		}),
 		registry: reg,
 	}
 }
@@ -163,6 +178,16 @@ func (m *Metrics) IncTrustlineChangesExtracted(n int) { m.TrustlineChanges.Add(f
 // unreadable.
 func (m *Metrics) IncSuppressedTrustlines(n int) { m.SuppressedTrustlines.Add(float64(n)) }
 
+// IncGapsHealed counts one fully healed gap.
+func (m *Metrics) IncGapsHealed() { m.GapsHealed.Inc() }
+
+// AddHealedLedgers counts ledgers replayed and committed by heals.
+func (m *Metrics) AddHealedLedgers(n int) { m.HealedLedgers.Add(float64(n)) }
+
+// IncEquivalenceFailures counts refused archive legs: the captive replay
+// did not reproduce the RPC byte-for-byte.
+func (m *Metrics) IncEquivalenceFailures() { m.EquivalenceFailures.Inc() }
+
 // IncBackfillChunks counts one committed backfill chunk.
 func (m *Metrics) IncBackfillChunks() { m.BackfillChunks.Inc() }
 
@@ -182,6 +207,9 @@ type Status struct {
 	OpenGaps         int64     `json:"open_gaps"`
 	SourceFailovers  int64     `json:"source_failovers"`
 	PendingBackfills int64     `json:"pending_backfills"`
+	// Archive is the archive leg's state: off, unverified, verified, or
+	// equivalence_failed.
+	Archive string `json:"archive"`
 }
 
 // State holds the mutable pieces of Status, safe for concurrent update.
@@ -193,6 +221,7 @@ type State struct {
 	openGaps         atomic.Int64
 	failovers        atomic.Int64
 	pendingBackfills atomic.Int64
+	archive          atomic.Value // string
 }
 
 // SetReady flips readiness; the loop calls it when it reaches the tip and
@@ -211,6 +240,17 @@ func (s *State) Observe(cursor, latest uint32, tipLag time.Duration) {
 func (s *State) SetOpenGaps(n int64)         { s.openGaps.Store(n) }
 func (s *State) SetFailovers(n int64)        { s.failovers.Store(n) }
 func (s *State) SetPendingBackfills(n int64) { s.pendingBackfills.Store(n) }
+
+// SetArchiveState records the archive leg's state for /status.
+func (s *State) SetArchiveState(state string) { s.archive.Store(state) }
+
+// archiveState reads the current archive state, defaulting to off.
+func (s *State) archiveState() string {
+	if v, ok := s.archive.Load().(string); ok {
+		return v
+	}
+	return "off"
+}
 
 // Server wires the operational endpoints onto an http.ServeMux.
 type Server struct {
@@ -263,5 +303,6 @@ func (s *Server) snapshot() Status {
 		OpenGaps:         s.state.openGaps.Load(),
 		SourceFailovers:  s.state.failovers.Load(),
 		PendingBackfills: s.state.pendingBackfills.Load(),
+		Archive:          s.state.archiveState(),
 	}
 }
