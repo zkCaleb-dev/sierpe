@@ -165,8 +165,14 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"
 const short = (s, n = 10) => s && s.length > 2 * n ? s.slice(0, n) + "…" + s.slice(-4) : (s ?? "");
 const when = (iso) => iso ? iso.replace("T", " ").replace("Z", "") : "";
 
+// api resolves a path against the origin WITHOUT document credentials:
+// a page opened as https://user:pass@host/ poisons relative fetch URLs
+// (the Fetch spec forbids credentials in request URLs), which blanked the
+// whole UI for anyone using that form. Found by the first real user.
+const api = (path) => location.origin + path;
+
 async function getJSON(path) {
-  const r = await fetch(path);
+  const r = await fetch(api(path));
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || (r.status + " " + r.statusText));
   return body;
@@ -248,7 +254,7 @@ async function selectContract(id) {
 async function unregister() {
   if (!confirm("Unregister " + selected + "? Indexed data is kept.")) return;
   try {
-    const r = await fetch("/v1/contracts/" + selected, {
+    const r = await fetch(api("/v1/contracts/" + selected), {
       method: "DELETE",
       headers: { Authorization: "Bearer " + $("token").value },
     });
@@ -272,7 +278,7 @@ $("regbtn").onclick = async () => {
   if (kinds.length) payload.kinds = kinds;
   $("regmsg").innerHTML = "<p class='note'>registering…</p>";
   try {
-    const r = await fetch("/v1/contracts", {
+    const r = await fetch(api("/v1/contracts"), {
       method: "POST",
       headers: { Authorization: "Bearer " + $("token").value, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
