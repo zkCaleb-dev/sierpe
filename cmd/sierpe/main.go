@@ -116,6 +116,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	publicAPI := api.NewServer(string(cfg.Network), st, st, log)
 	publicAPI.Register(mux)
 	publicAPI.RegisterState(mux, st)
+	publicAPI.RegisterTransfers(mux, st)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

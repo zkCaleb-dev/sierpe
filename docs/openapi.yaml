@@ -217,6 +217,56 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/contracts/{id}/transfers:
+    get:
+      tags: [public]
+      summary: Decoded token movements
+      description: |
+        SEP-41 token movements (transfer, mint, burn, clawback) decoded from
+        the contract's events, in chain order. Rows share their id with the
+        raw event they derive from. Amounts are exact i128 strings in raw
+        token units; never sum amounts across contracts. Requires the
+        transfers kind on the registration (SACs derive it by default).
+        Same pagination and honesty contract as the events endpoint: opaque
+        full-query cursors, scanStatus, declared coverage.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: account
+          in: query
+          schema: { type: string }
+          description: Matches either side of the movement; exclusive with from/to.
+        - name: from
+          in: query
+          schema: { type: string }
+          description: Exact sender address (G/C/M... strkey as emitted).
+        - name: to
+          in: query
+          schema: { type: string }
+          description: Exact recipient address.
+        - name: type
+          in: query
+          schema: { type: string, enum: [transfer, mint, burn, clawback] }
+        - name: startLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: endLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of movements with scan status and coverage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransfersPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       tags: [operational]
@@ -439,6 +489,40 @@ components:
         changes:
           type: array
           items: { $ref: "#/components/schemas/StateChange" }
+        cursor: { type: string }
+        scanStatus:
+          type: string
+          enum: [HAS_MORE, WAITING_FOR_LEDGERS, OLDEST_REACHED, COMPLETE]
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+
+    Transfer:
+      type: object
+      properties:
+        id: { type: string, description: "{toid}-{event_index}, identical to the source event id." }
+        ledger: { type: integer }
+        ledgerClosedAt: { type: string, format: date-time }
+        contractId: { type: string }
+        transferType: { type: string, enum: [transfer, mint, burn, clawback] }
+        from: { type: string, description: Sender address (absent on mint). }
+        to: { type: string, description: Recipient address (absent on burn and clawback). }
+        toMuxedId:
+          type: string
+          description: >
+            CAP-67 destination muxed id when the event carried one: u64 as
+            decimal, bytes as hex, string verbatim.
+        amount: { type: string, description: Exact i128 amount in raw token units. }
+        asset: { type: string, description: SEP-0011 asset string (absent for custom tokens that omit it). }
+        txHash: { type: string }
+        txIndex: { type: integer }
+        opIndex: { type: integer }
+
+    TransfersPage:
+      type: object
+      properties:
+        transfers:
+          type: array
+          items: { $ref: "#/components/schemas/Transfer" }
         cursor: { type: string }
         scanStatus:
           type: string
