@@ -26,6 +26,9 @@ Build and push the image (until CI does it):
 ```bash
 docker build -t ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z --build-arg VERSION=vX.Y.Z .
 docker push ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z
+docker build -f Dockerfile.full --platform linux/amd64 \
+  -t ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z-full --build-arg VERSION=vX.Y.Z .
+docker push ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z-full
 ```
 
 ## Verify before publishing the draft

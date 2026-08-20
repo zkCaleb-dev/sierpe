@@ -20,12 +20,21 @@ All notable changes to Sierpe are documented here. The format follows
   frontiers lowered (and un-clamped) in the same transaction, so declared
   coverage grows exactly as fast as healed data lands. Before the first
   heal the captive replay must prove itself **byte-equivalent to the RPC**
-  on a checkpoint-aligned range both can serve; a divergent replay
-  disables healing (`sierpe_archive_equivalence_failures_total`,
-  alertable) instead of filling gaps with unverified data. `/status`
+  on a checkpoint-aligned range both can serve, after normalizing the two
+  parts of the meta that are unstable run to run even on identical core
+  builds (both proven live): diagnostic events are stripped, and
+  ledger-entry-change units are canonically ordered within each
+  operation. A divergent replay disables healing
+  (`sierpe_archive_equivalence_failures_total`, alertable) instead of
+  filling gaps with unverified data. `/status`
   reports the leg as `archive: off|unverified|verified|equivalence_failed`,
   and heals progress through `sierpe_gaps_healed_total` and
   `sierpe_healed_ledgers_total`.
+- `-full` image variant (`Dockerfile.full`, linux/amd64): the appliance
+  plus stellar-core, with `STELLAR_CORE_BINARY` pre-set — deploy it and
+  registrations reach below RPC retention out of the box. The slim image
+  stays multi-arch and distroless for archive-less deployments.
+  Deployment guidance in docs/DEPLOY.md.
 
 ## [1.1.0] - 2026-08-20
 
