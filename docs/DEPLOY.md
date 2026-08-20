@@ -13,6 +13,9 @@ appliance; pick the one that matches your infrastructure.
 | `RPC_URLS` | mainnet | Comma-separated failover pool of Stellar RPC endpoints, in preference order. Testnet defaults to the public SDF endpoint. |
 | `HTTP_PORT` | no | API port, default 8080. |
 | `START_LEDGER` | no | First ledger for a fresh database (default: current tip). |
+| `STELLAR_CORE_BINARY` | no | Path to a stellar-core binary; enables the archive leg. Pre-set in the `-full` image. |
+| `HISTORY_ARCHIVE_URLS` | no | History archives for the archive leg. Defaults to the SDF public archives. |
+| `CAPTIVE_STORAGE_PATH` | no | Scratch space for captive core buckets (disposable). Defaults to the OS temp dir. |
 
 Operational truths that apply everywhere:
 
@@ -66,6 +69,29 @@ Sierpe classifies the contract from its on-chain spec, walks its history
 backwards in atomic chunks (clamping honestly at the RPC retention wall),
 and follows the tip. Watch progress in `/status` (`pending_backfills`) or
 the `sierpe_backfill_*` metrics.
+
+## The archive leg (`-full` image)
+
+The slim image clamps honestly at the RPC retention wall and records the
+unserved range as a gap. The `-full` variant
+(`ghcr.io/zkcaleb-dev/sierpe:<tag>-full`, built from
+[Dockerfile.full](../Dockerfile.full)) bundles stellar-core and **heals
+those gaps** by replaying the missing ledgers from the public history
+archives — register a contract `from: "genesis"` and its complete history
+converges even where no RPC serves it anymore.
+
+What to know before enabling it:
+
+- **linux/amd64 only** (SDF publishes stellar-core for amd64); it runs
+  under emulation on ARM hosts. Budget more CPU and a few GB of scratch
+  disk for bucket downloads.
+- Before the first heal, the replay must prove itself **byte-equivalent to
+  your RPC** on a range both serve. `/status` shows the verdict
+  (`archive: verified`); a divergence disables healing and raises
+  `sierpe_archive_equivalence_failures_total` instead of storing
+  unverified data.
+- Heals commit in atomic 2000-ledger chunks; watch
+  `sierpe_healed_ledgers_total` and `open_gaps` drain in `/status`.
 
 ## Observability
 

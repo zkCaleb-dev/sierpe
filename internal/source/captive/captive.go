@@ -59,10 +59,17 @@ func New(cfg Config) (*Source, error) {
 		NetworkPassphrase:  cfg.Passphrase,
 		HistoryArchiveURLs: cfg.ArchiveURLs,
 		CoreBinaryPath:     cfg.BinaryPath,
-		// Match the event semantics RPC serves (DESIGN §5): unified events
-		// for every operation, backfilled for pre-protocol-22 SAC history.
-		EmitUnifiedEvents:                 true,
-		EmitUnifiedEventsBeforeProtocol22: true,
+		// Match what RPC serves byte-for-byte (DESIGN §5): unified events
+		// (plus their pre-protocol-22 backfill), soroban diagnostic events,
+		// and tx meta ext v1 — and nothing more. Both deviations were
+		// caught live by the equivalence gate: unified events alone left
+		// the replayed meta ~11% smaller than the RPC's (missing diagnostic
+		// events), and EmitVerboseMeta overshot by 12 bytes per ledger
+		// (EMIT_LEDGER_CLOSE_META_EXT_V1, which RPC does not serve).
+		EmitUnifiedEvents:                  true,
+		EmitUnifiedEventsBeforeProtocol22:  true,
+		EnforceSorobanDiagnosticEvents:     true,
+		EnforceSorobanTransactionMetaExtV1: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("captive: build core config: %w", err)

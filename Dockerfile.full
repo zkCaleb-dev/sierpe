@@ -1,0 +1,25 @@
+# The -full variant: the appliance plus a stellar-core binary, enabling the
+# archive leg (heal history below RPC retention from the public archives).
+#
+# linux/amd64 only: SDF publishes stellar-core images for amd64 exclusively.
+# On ARM hosts it runs under emulation; for archive-less deployments use the
+# slim image (Dockerfile), which is multi-arch and distroless.
+
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+    -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/sierpe ./cmd/sierpe
+
+# The runtime base ships /usr/bin/stellar-core with its shared libraries;
+# sierpe rides along and spawns core as a captive subprocess.
+FROM stellar/stellar-core:28
+COPY --from=build /out/sierpe /sierpe
+ENV STELLAR_CORE_BINARY=/usr/bin/stellar-core
+EXPOSE 8080
+ENTRYPOINT ["/sierpe"]
+CMD ["run"]
