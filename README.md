@@ -18,6 +18,7 @@ SAC assets — in your own Postgres, behind an honest REST API.
 3. Sierpe discovers the contract's events from its on-chain spec and
    backfills its full history — including ranges no RPC serves anymore
 4. GET /v1/contracts/C.../events?topic0=...&after=<cursor>
+   ...or open / in a browser: the embedded UI covers the whole surface
 ```
 
 No forks, no custom code, no vendor. Configuration is data: register
