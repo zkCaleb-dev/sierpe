@@ -1,6 +1,6 @@
 # Sierpe
 
-> **Status: v1.0.0 — first public release.** The design is stable
+> **Status: v1.1.0.** The design is stable
 > ([docs/DESIGN.md](docs/DESIGN.md)) and the v1 surface (events + contract
 > state) is feature-complete and verified live against testnet. Expect
 > pre-1.x-maturity rough edges; issues and feedback are welcome.
@@ -8,8 +8,9 @@
 **Your own Stellar indexer, deployed in minutes.**
 
 Sierpe is a self-hosted server that watches the Stellar network for the
-contracts *you* register and keeps their complete history — events and
-contract state — in your own Postgres, behind an honest REST API.
+contracts *you* register and keeps their complete history — events,
+contract state, decoded token transfers, and the classic trustlines of
+SAC assets — in your own Postgres, behind an honest REST API.
 
 ```
 1. Deploy the container next to an empty Postgres
@@ -102,7 +103,8 @@ are documented in [docs/METRICS.md](docs/METRICS.md).
 | M1 ✅ | Events end-to-end: registration, classification, live + backfill, events API |
 | M2 ✅ | Contract state: change history + current snapshot |
 | M3 ✅ | Appliance polish: container, compose, Grafana dashboard, status page, docs — released as v1.0.0 |
-| v1.1 | Archive replay (history below RPC retention), SAC transfers/trustlines |
+| v1.1 ✅ | Token transfers (SEP-41 decode, CAP-67 muxed) and classic trustlines of SAC assets |
+| v1.2 | Archive replay: history below RPC retention (captive core, `-full` image) |
 | v2 | Push delivery: signed webhooks, broker sinks, management UI |
 
 ## License
