@@ -6,7 +6,16 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Token transfers (`transfers` kind): SEP-41 movement events (transfer,
+  mint, burn, clawback) decode into structured rows — from/to addresses,
+  exact i128 amount, SEP-0011 asset, CAP-67 destination muxed id — written
+  in the same atomic commit as events and state. SAC registrations derive
+  transfers by default; custom SEP-41 tokens opt in through `kinds`. A
+  movement event that fails to decode is counted
+  (`sierpe_suppressed_transfers_total`, alertable) while its raw event row
+  still lands.
 
 ## [1.0.0] - 2026-08-20
 

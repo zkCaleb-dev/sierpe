@@ -25,6 +25,7 @@ import (
 type Result struct {
 	Events       []store.Event
 	StateChanges []store.StateChange
+	Transfers    []store.Transfer
 	// FailedTxs counts transactions skipped because they did not succeed;
 	// their events and state changes never happened. Routine traffic.
 	FailedTxs int
@@ -35,6 +36,11 @@ type Result struct {
 	// SuppressedEvents counts individual records dropped because their XDR
 	// could not be re-encoded. Same alarm semantics as SuppressedTxs.
 	SuppressedEvents int
+	// SuppressedTransfers counts events that named a token movement but did
+	// not decode as one. The raw event row still lands, so nothing is lost —
+	// but a nonzero value means the decoder no longer matches what the
+	// network emits, and that is worth alerting on.
+	SuppressedTransfers int
 }
 
 // Events extracts every event emitted by watched contracts in one ledger.
@@ -124,15 +130,37 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 				continue
 			}
 			contract, watched := watch.Get(contractID)
-			if !watched || !contract.HasKind(store.KindEvents) {
+			if !watched {
 				continue
 			}
-			record, err := buildEvent(ev, contractID, seq, closedAt, txHash, int32(tx.Index), int32(opIndex), eventIndex, prefix)
-			if err != nil {
-				res.SuppressedEvents++
-				continue
+			if contract.HasKind(store.KindEvents) {
+				record, err := buildEvent(ev, contractID, seq, closedAt, txHash, int32(tx.Index), int32(opIndex), eventIndex, prefix)
+				if err != nil {
+					res.SuppressedEvents++
+				} else {
+					res.Events = append(res.Events, record)
+				}
 			}
-			res.Events = append(res.Events, record)
+			if contract.HasKind(store.KindTransfers) {
+				body, ok := ev.Body.GetV0()
+				if !ok || len(body.Topics) == 0 {
+					continue
+				}
+				sym, ok := body.Topics[0].GetSym()
+				if !ok {
+					continue
+				}
+				transferType, isMovement := transferEventNames[string(sym)]
+				if !isMovement {
+					continue
+				}
+				record, err := buildTransfer(body, transferType, contractID, seq, closedAt, txHash, int32(tx.Index), int32(opIndex), eventIndex, prefix)
+				if err != nil {
+					res.SuppressedTransfers++
+					continue
+				}
+				res.Transfers = append(res.Transfers, record)
+			}
 		}
 	}
 	return true

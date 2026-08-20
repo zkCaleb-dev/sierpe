@@ -168,15 +168,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	kinds := req.Kinds
-	if len(kinds) == 0 {
-		// D1 default: derive everything v1 knows how to derive.
-		kinds = []string{store.KindEvents, store.KindState}
-	}
-	for _, k := range kinds {
-		if k != store.KindEvents && k != store.KindState {
+	for _, k := range req.Kinds {
+		if k != store.KindEvents && k != store.KindState && k != store.KindTransfers {
 			writeError(w, http.StatusBadRequest,
-				fmt.Sprintf("kind %q is not supported (supported: %s, %s)", k, store.KindEvents, store.KindState))
+				fmt.Sprintf("kind %q is not supported (supported: %s, %s, %s)",
+					k, store.KindEvents, store.KindState, store.KindTransfers))
 			return
 		}
 	}
@@ -196,6 +192,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			"could not read the contract from the chain; retry when the RPC is reachable")
 		return
 	}
+	kinds := req.Kinds
+	if len(kinds) == 0 {
+		// D1 default: derive everything v1 knows how to derive for what the
+		// chain says the contract is. Transfers default on for SACs only;
+		// custom SEP-41 tokens opt in through explicit kinds.
+		kinds = []string{store.KindEvents, store.KindState}
+		if cls.Type == registry.TypeSAC {
+			kinds = append(kinds, store.KindTransfers)
+		}
+	}
+
 	clsJSON, err := json.Marshal(cls)
 	if err != nil {
 		s.log.Error("classification marshal failed", "contract_id", req.ContractID, "err", err)

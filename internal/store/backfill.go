@@ -150,7 +150,7 @@ func (s *Store) CountPendingBackfills(ctx context.Context, network string) (int6
 // chunk of work, never correctness. State entries stay convergent because
 // their upsert is guarded by last_ledger — replaying older history never
 // overwrites newer state.
-func (s *Store) CommitBackfillChunk(ctx context.Context, network string, b Backfill, events []Event, states []StateChange) error {
+func (s *Store) CommitBackfillChunk(ctx context.Context, network string, b Backfill, events []Event, states []StateChange, transfers []Transfer) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := insertEvents(ctx, tx, network, events); err != nil {
 			return err
@@ -159,6 +159,9 @@ func (s *Store) CommitBackfillChunk(ctx context.Context, network string, b Backf
 			return err
 		}
 		if err := applyStateEntries(ctx, tx, network, states); err != nil {
+			return err
+		}
+		if err := insertTransfers(ctx, tx, network, transfers); err != nil {
 			return err
 		}
 		var clamped *int64
