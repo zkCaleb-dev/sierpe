@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -38,6 +39,22 @@ var defaultRPCURLs = map[Network][]string{
 	NetworkTestnet: {"https://soroban-testnet.stellar.org"},
 }
 
+// defaultArchiveURLs holds the SDF public history archives used when
+// HISTORY_ARCHIVE_URLS is not set. Unlike RPC these are static file
+// hosting; the public defaults are reliable on both networks.
+var defaultArchiveURLs = map[Network][]string{
+	NetworkTestnet: {
+		"https://history.stellar.org/prd/core-testnet/core_testnet_001",
+		"https://history.stellar.org/prd/core-testnet/core_testnet_002",
+		"https://history.stellar.org/prd/core-testnet/core_testnet_003",
+	},
+	NetworkMainnet: {
+		"https://history.stellar.org/prd/core-live/core_live_001",
+		"https://history.stellar.org/prd/core-live/core_live_002",
+		"https://history.stellar.org/prd/core-live/core_live_003",
+	},
+}
+
 // Config is Sierpe's validated boot configuration.
 type Config struct {
 	// DatabaseURL points at an empty (or Sierpe-owned) Postgres database.
@@ -54,7 +71,20 @@ type Config struct {
 	// StartLedger optionally pins the first ledger to ingest when no cursor
 	// exists yet. Zero means "start at the current tip".
 	StartLedger uint32
+	// CoreBinary is the path to a stellar-core binary. Setting it enables
+	// the archive leg (captive core replay of history below RPC retention).
+	// Empty means the archive leg is off and gaps stay recorded.
+	CoreBinary string
+	// ArchiveURLs are the history archives captive core replays from.
+	// Only meaningful when CoreBinary is set.
+	ArchiveURLs []string
+	// CaptiveStoragePath is where captive core keeps its bucket data.
+	// Contents are disposable (re-downloaded on demand).
+	CaptiveStoragePath string
 }
+
+// ArchiveEnabled reports whether the archive leg is configured.
+func (c *Config) ArchiveEnabled() bool { return c.CoreBinary != "" }
 
 // Load reads configuration from lookup (normally os.LookupEnv), applies
 // defaults, and validates everything. It returns actionable errors: a config
@@ -121,6 +151,39 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 		}
 	}
 
+	if bin, ok := lookup("STELLAR_CORE_BINARY"); ok && bin != "" {
+		info, err := os.Stat(bin)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Sprintf("STELLAR_CORE_BINARY %q does not exist (%v)", bin, err))
+		case info.IsDir() || info.Mode().Perm()&0o111 == 0:
+			errs = append(errs, fmt.Sprintf("STELLAR_CORE_BINARY %q is not an executable file", bin))
+		default:
+			cfg.CoreBinary = bin
+		}
+	}
+	rawArchives, archivesSet := lookup("HISTORY_ARCHIVE_URLS")
+	cfg.ArchiveURLs = splitURLs(rawArchives)
+	if len(cfg.ArchiveURLs) == 0 {
+		cfg.ArchiveURLs = defaultArchiveURLs[cfg.Network]
+	}
+	for _, raw := range cfg.ArchiveURLs {
+		if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, fmt.Sprintf("HISTORY_ARCHIVE_URLS entry %q is not a valid http(s) URL", raw))
+		}
+	}
+	if archivesSet && rawArchives != "" && cfg.CoreBinary == "" {
+		// A configured variable that does nothing is a lie (rule 12).
+		errs = append(errs, "HISTORY_ARCHIVE_URLS is set but STELLAR_CORE_BINARY is not; the archive leg needs both")
+	}
+	cfg.CaptiveStoragePath = os.TempDir()
+	if p, ok := lookup("CAPTIVE_STORAGE_PATH"); ok && p != "" {
+		if cfg.CoreBinary == "" {
+			errs = append(errs, "CAPTIVE_STORAGE_PATH is set but STELLAR_CORE_BINARY is not; the archive leg needs both")
+		}
+		cfg.CaptiveStoragePath = p
+	}
+
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(errs, "\n  - "))
 	}
@@ -173,8 +236,20 @@ func (c *Config) Redacted() string {
 			hosts = append(hosts, "<invalid>")
 		}
 	}
+	archive := "off"
+	if c.ArchiveEnabled() {
+		archiveHosts := make([]string, 0, len(c.ArchiveURLs))
+		for _, raw := range c.ArchiveURLs {
+			if u, err := url.Parse(raw); err == nil {
+				archiveHosts = append(archiveHosts, u.Scheme+"://"+u.Host)
+			} else {
+				archiveHosts = append(archiveHosts, "<invalid>")
+			}
+		}
+		archive = fmt.Sprintf("core=%s archives=[%s]", c.CoreBinary, strings.Join(archiveHosts, " "))
+	}
 	return fmt.Sprintf(
-		"network=%s database=%s rpc=[%s] http_port=%d start_ledger=%d admin_token=<set>",
-		c.Network, db, strings.Join(hosts, " "), c.HTTPPort, c.StartLedger,
+		"network=%s database=%s rpc=[%s] http_port=%d start_ledger=%d archive=%s admin_token=<set>",
+		c.Network, db, strings.Join(hosts, " "), c.HTTPPort, c.StartLedger, archive,
 	)
 }
