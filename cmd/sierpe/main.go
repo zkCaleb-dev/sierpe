@@ -30,6 +30,7 @@ import (
 	"github.com/zkCaleb-dev/sierpe/internal/source/captive"
 	"github.com/zkCaleb-dev/sierpe/internal/source/rpc"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
+	"github.com/zkCaleb-dev/sierpe/internal/ui"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -119,6 +120,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	publicAPI.RegisterState(mux, st)
 	publicAPI.RegisterTransfers(mux, st)
 	publicAPI.RegisterTrustlines(mux, st)
+	ui.Register(mux)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

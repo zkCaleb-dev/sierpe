@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sierpe</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%23e8590c'/%3E%3Cpath fill='%23fff' d='M4 17c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3v-2c-2.5 0-2.5 3-5 3s-2.5-3-5-3-2.5 3-5 3v2zm0-6c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3V6c-2.5 0-2.5 3-5 3S11.5 6 9 6 6.5 9 4 9v2z'/%3E%3C/svg%3E">
+<style>
+/* Sierpe embedded UI — same aesthetic as sierpe-web: orange & white. */
+:root {
+  --orange: #e8590c;
+  --orange-dark: #c44a08;
+  --orange-pale: #fff3ec;
+  --ink: #222;
+  --muted: #666;
+  --line: #ddd;
+  --box: #f7f7f7;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  background: #fff;
+}
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+
+#topbar { background: var(--orange); border-bottom: 3px solid var(--orange-dark); }
+#topbar .wrap { display: flex; align-items: center; justify-content: space-between; min-height: 48px; }
+#logo { color: #fff; font-size: 21px; font-weight: 700; letter-spacing: .5px; text-decoration: none; display: flex; align-items: center; gap: 8px; }
+#instinfo { color: #fff; font-size: 13px; font-weight: 600; }
+#instinfo .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #bbb; margin-right: 5px; }
+#instinfo .dot.ok { background: #6ee06e; }
+
+main { padding: 20px 16px 48px; }
+h1 { font-size: 22px; margin: 8px 0 12px; }
+h2 { font-size: 18px; margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--orange-dark); }
+a { color: var(--orange-dark); }
+
+.cols { display: grid; grid-template-columns: 1fr 300px; gap: 28px; }
+.cols > * { min-width: 0; }
+@media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+
+.sidebox { border: 1px solid var(--line); background: var(--box); margin-bottom: 20px; font-size: 14px; }
+.sidebox h3 { margin: 0; padding: 7px 12px; background: var(--orange); color: #fff; font-size: 14px; }
+.sidebox .pad { padding: 8px 12px; }
+.sidebox dl { margin: 4px 0; }
+.sidebox dt { font-weight: 600; margin-top: 6px; }
+.sidebox dd { margin: 0; color: var(--muted); }
+
+table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 13px; }
+th, td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: var(--box); }
+.tblwrap { overflow-x: auto; }
+tr.sel { background: var(--orange-pale); }
+#contracts tbody tr { cursor: pointer; }
+
+.err {
+  margin: 10px 0; padding: 8px 14px; background: var(--orange-pale);
+  border-left: 3px solid var(--orange); font-size: 14px; white-space: pre-wrap;
+  word-break: break-word;
+}
+.note { color: var(--muted); font-size: 13px; }
+
+input, select, button {
+  font: inherit; font-size: 13px; padding: 4px 6px;
+  border: 1px solid var(--line); border-radius: 3px; background: #fff;
+}
+button {
+  background: var(--orange); color: #fff; border-color: var(--orange-dark);
+  font-weight: 600; cursor: pointer; padding: 4px 12px;
+}
+button:hover { background: var(--orange-dark); }
+button.plain { background: #fff; color: var(--orange-dark); font-weight: 400; }
+button.plain:hover { background: var(--box); }
+form.inline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+form.inline label { font-size: 13px; color: var(--muted); }
+.sidebox input:not([type=checkbox]) { width: 100%; margin: 3px 0; }
+.kindcheck input { width: auto; margin: 0 3px 0 0; vertical-align: -1px; }
+.kindcheck { font-size: 13px; margin-right: 8px; white-space: nowrap; }
+
+#tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 2px solid var(--orange); margin-top: 14px; }
+#tabs button {
+  background: var(--box); color: var(--ink); border: 1px solid var(--line);
+  border-bottom: none; border-radius: 3px 3px 0 0; font-weight: 600; margin-right: 3px;
+}
+#tabs button.active { background: var(--orange); color: #fff; border-color: var(--orange-dark); }
+
+.statusline { font-size: 13px; color: var(--muted); margin: 6px 0; }
+.badge {
+  display: inline-block; font-size: 12px; font-weight: 600; padding: 0 7px;
+  border-radius: 9px; background: var(--box); border: 1px solid var(--line);
+}
+.badge.warn { background: var(--orange-pale); border-color: var(--orange); color: var(--orange-dark); }
+</style>
+</head>
+<body>
+<header id="topbar">
+  <div class="wrap">
+    <a id="logo" href="/">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 17c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3v-2c-2.5 0-2.5 3-5 3s-2.5-3-5-3-2.5 3-5 3v2zm0-6c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3V6c-2.5 0-2.5 3-5 3S11.5 6 9 6 6.5 9 4 9v2z"/></svg>
+      sierpe
+    </a>
+    <span id="instinfo"><span class="dot" id="readydot"></span><span id="instlabel">connecting…</span></span>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="cols">
+    <div>
+      <h1>Registered contracts</h1>
+      <div class="tblwrap">
+        <table id="contracts">
+          <thead><tr><th>Contract</th><th>Type</th><th>Kinds</th><th>Registered</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="note" id="nocontracts" hidden>Nothing registered yet — use the Register box to add a contract.</p>
+
+      <div id="detail" hidden>
+        <h2 id="dtitle" class="mono"></h2>
+        <div id="dinfo"></div>
+        <div id="tabs"></div>
+        <div id="tabbody"></div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="sidebox">
+        <h3>Instance</h3>
+        <div class="pad"><dl id="statusdl"><dd>loading…</dd></dl></div>
+      </div>
+      <div class="sidebox">
+        <h3>Admin token</h3>
+        <div class="pad">
+          <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off">
+          <p class="note">Held only in this tab; sent as a bearer header on admin calls.</p>
+        </div>
+      </div>
+      <div class="sidebox">
+        <h3>Register contract</h3>
+        <div class="pad">
+          <input id="regid" class="mono" placeholder="C… contract address" autocomplete="off">
+          <input id="regfrom" placeholder="from: ledger number, genesis, or empty (tip)" autocomplete="off">
+          <div style="margin:4px 0">
+            <label class="kindcheck"><input type="checkbox" class="kind" value="events"> events</label>
+            <label class="kindcheck"><input type="checkbox" class="kind" value="state"> state</label>
+            <label class="kindcheck"><input type="checkbox" class="kind" value="transfers"> transfers</label>
+            <label class="kindcheck"><input type="checkbox" class="kind" value="trustlines"> trustlines</label>
+          </div>
+          <p class="note">No kinds checked = the classified default.</p>
+          <button id="regbtn">Register</button>
+          <div id="regmsg"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const short = (s, n = 10) => s && s.length > 2 * n ? s.slice(0, n) + "…" + s.slice(-4) : (s ?? "");
+const when = (iso) => iso ? iso.replace("T", " ").replace("Z", "") : "";
+
+async function getJSON(path) {
+  const r = await fetch(path);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || (r.status + " " + r.statusText));
+  return body;
+}
+
+function errBox(el, e) { el.innerHTML = '<div class="err">' + esc(e.message || e) + "</div>"; }
+
+/* ---- instance status ---- */
+async function refreshStatus() {
+  try {
+    const s = await getJSON("/status");
+    $("readydot").className = "dot" + (s.ready ? " ok" : "");
+    $("instlabel").textContent = s.network + " · " + s.version;
+    $("statusdl").innerHTML =
+      "<dt>Cursor</dt><dd class='mono'>" + s.cursor_sequence + " (tip " + s.latest_known_ledger + ")</dd>" +
+      "<dt>Tip lag</dt><dd>" + s.tip_lag_seconds.toFixed(1) + " s</dd>" +
+      "<dt>Ready</dt><dd>" + (s.ready ? "yes" : "catching up") + "</dd>" +
+      "<dt>Pending backfills</dt><dd>" + s.pending_backfills + "</dd>" +
+      "<dt>Open gaps</dt><dd>" + s.open_gaps + "</dd>" +
+      "<dt>Archive leg</dt><dd>" + esc(s.archive) + "</dd>" +
+      "<dt>Started</dt><dd>" + when(s.started_at.slice(0, 19)) + "</dd>";
+  } catch (e) {
+    $("instlabel").textContent = "unreachable";
+    $("readydot").className = "dot";
+  }
+}
+
+/* ---- contracts ---- */
+let selected = null;
+
+async function refreshContracts() {
+  const body = $("contracts").querySelector("tbody");
+  try {
+    const d = await getJSON("/v1/contracts");
+    $("nocontracts").hidden = d.contracts.length > 0;
+    body.innerHTML = d.contracts.map((c) =>
+      "<tr data-id='" + esc(c.contract_id) + "'" + (c.contract_id === selected ? " class='sel'" : "") + ">" +
+      "<td class='mono' title='" + esc(c.contract_id) + "'>" + short(c.contract_id, 8) + "</td>" +
+      "<td>" + esc(c.classification?.type || "?") + "</td>" +
+      "<td>" + c.kinds.map(esc).join(", ") + "</td>" +
+      "<td>" + when(c.registered_at) + "</td></tr>"
+    ).join("");
+    for (const tr of body.querySelectorAll("tr")) {
+      tr.onclick = () => selectContract(tr.dataset.id);
+    }
+  } catch (e) { errBox(body, e); }
+}
+
+async function selectContract(id) {
+  selected = id;
+  refreshContracts();
+  $("detail").hidden = false;
+  $("dtitle").textContent = id;
+  $("dinfo").innerHTML = "<p class='note'>loading…</p>";
+  try {
+    const d = await getJSON("/v1/contracts/" + id);
+    const cov = d.coverage;
+    const evs = (d.classification?.events || []).map(esc).join(", ");
+    const counts = Object.entries(d.events?.by_name || d.events?.byName || {})
+      .map(([k, v]) => esc(k || "(unnamed)") + ": " + v).join(" · ");
+    $("dinfo").innerHTML =
+      "<div class='statusline'>type <b>" + esc(d.classification?.type) + "</b> (" + esc(d.classification?.method) + ")" +
+      " · kinds: <b>" + d.kinds.map(esc).join(", ") + "</b>" +
+      " · registered " + when(d.registered_at) + "</div>" +
+      (evs ? "<div class='statusline'>declared events: " + evs + "</div>" : "") +
+      "<div class='statusline'>coverage: ledgers <b class='mono'>" + cov.indexedFromLedger + " – " + cov.indexedToLedger + "</b>" +
+      (cov.backfillPending ? " <span class='badge warn'>backfill running</span>" : " <span class='badge'>backfill done</span>") +
+      (cov.clampedAt ? " <span class='badge warn'>clamped at " + cov.clampedAt + "</span>" : "") + "</div>" +
+      "<div class='statusline'>stored: <b>" + (d.events?.total ?? 0) + "</b> events · <b>" + (d.state?.entries ?? 0) + "</b> live state entries" +
+      (counts ? " — " + counts : "") + "</div>" +
+      "<p><button class='plain' id='unreg'>Unregister this contract</button> <span class='note'>data is kept; re-registering resumes</span></p>" +
+      "<div id='unregmsg'></div>";
+    $("unreg").onclick = unregister;
+  } catch (e) { errBox($("dinfo"), e); }
+  renderTabs();
+  openTab(currentTab);
+}
+
+async function unregister() {
+  if (!confirm("Unregister " + selected + "? Indexed data is kept.")) return;
+  try {
+    const r = await fetch("/v1/contracts/" + selected, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer " + $("token").value },
+    });
+    if (!r.ok && r.status !== 204) {
+      const b = await r.json().catch(() => ({}));
+      throw new Error(b.error || r.status + " " + r.statusText);
+    }
+    $("detail").hidden = true;
+    selected = null;
+    refreshContracts();
+  } catch (e) { errBox($("unregmsg"), e); }
+}
+
+/* ---- register ---- */
+$("regbtn").onclick = async () => {
+  const payload = { contract_id: $("regid").value.trim() };
+  const from = $("regfrom").value.trim();
+  if (from === "genesis") payload.from = "genesis";
+  else if (from !== "") payload.from = Number(from);
+  const kinds = [...document.querySelectorAll(".kind:checked")].map((k) => k.value);
+  if (kinds.length) payload.kinds = kinds;
+  $("regmsg").innerHTML = "<p class='note'>registering…</p>";
+  try {
+    const r = await fetch("/v1/contracts", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + $("token").value, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(b.error || r.status + " " + r.statusText);
+    $("regmsg").innerHTML = "<p class='note'>registered as <b>" + esc(b.classification?.type) + "</b> with kinds " + b.kinds.map(esc).join(", ") + "</p>";
+    $("regid").value = "";
+    refreshContracts();
+    selectContract(b.contract_id);
+  } catch (e) { errBox($("regmsg"), e); }
+};
+
+/* ---- data explorer tabs ---- */
+const TABS = {
+  events: {
+    label: "Events",
+    path: (id) => "/v1/contracts/" + id + "/events",
+    filters: [["topic0", "topic0 (base64 ScVal)"], ["startLedger", "startLedger"], ["endLedger", "endLedger"]],
+    head: ["id", "ledger", "closed at", "name", "topics", "value", "tx"],
+    rows: (d) => d.events.map((e) => [
+      mono(short(e.id, 8), e.id), e.ledger, when(e.ledgerClosedAt), esc(e.eventName || ""),
+      e.topic.length, mono(short(e.value, 10), e.value), mono(short(e.txHash, 6), e.txHash),
+    ]),
+  },
+  transfers: {
+    label: "Transfers",
+    path: (id) => "/v1/contracts/" + id + "/transfers",
+    filters: [["account", "account (either side)"], ["from", "from"], ["to", "to"],
+      ["type", "type", ["", "transfer", "mint", "burn", "clawback"]],
+      ["startLedger", "startLedger"], ["endLedger", "endLedger"]],
+    head: ["ledger", "closed at", "type", "from", "to", "amount", "asset"],
+    rows: (d) => d.transfers.map((t) => [
+      t.ledger, when(t.ledgerClosedAt), esc(t.transferType),
+      mono(short(t.from || "", 6), t.from), mono(short(t.to || "", 6), t.to),
+      mono(esc(t.amount)), esc(t.asset || ""),
+    ]),
+  },
+  state: {
+    label: "State",
+    path: (id) => "/v1/contracts/" + id + "/state",
+    filters: [["key", "key (base64 ScVal)"]],
+    head: ["key", "durability", "value", "last ledger", "closed at"],
+    rows: (d) => d.entries.map((e) => [
+      mono(short(e.key, 12), e.key), esc(e.durability), mono(short(e.value, 14), e.value),
+      e.lastModifiedLedger, when(e.closedAt),
+    ]),
+    cursorField: "cursor",
+  },
+  statehist: {
+    label: "State history",
+    path: (id) => "/v1/contracts/" + id + "/state/history",
+    filters: [["key", "key (base64 ScVal)"], ["startLedger", "startLedger"], ["endLedger", "endLedger"]],
+    head: ["ledger", "closed at", "change", "key", "pre", "post"],
+    rows: (d) => d.changes.map((c) => [
+      c.ledger, when(c.ledgerClosedAt), esc(c.changeType), mono(short(c.key, 10), c.key),
+      mono(short(c.pre || "", 10), c.pre), mono(short(c.post || "", 10), c.post),
+    ]),
+  },
+  trustlines: {
+    label: "Trustlines",
+    path: (id) => "/v1/contracts/" + id + "/trustlines",
+    filters: [["account", "account (G…)"]],
+    head: ["account", "asset", "balance", "limit", "flags", "last ledger"],
+    rows: (d) => d.trustlines.map((t) => [
+      mono(short(t.accountId, 8), t.accountId), esc(short(t.asset, 12)),
+      mono(esc(t.balance)), mono(esc(t.limit)), t.flags, t.lastModifiedLedger,
+    ]),
+  },
+  tlhist: {
+    label: "TL history",
+    path: (id) => "/v1/contracts/" + id + "/trustlines/history",
+    filters: [["account", "account (G…)"], ["startLedger", "startLedger"], ["endLedger", "endLedger"]],
+    head: ["ledger", "closed at", "change", "account", "pre balance", "post balance"],
+    rows: (d) => d.changes.map((c) => [
+      c.ledger, when(c.ledgerClosedAt), esc(c.changeType), mono(short(c.accountId, 8), c.accountId),
+      mono(esc(c.preBalance || "")), mono(esc(c.postBalance || "")),
+    ]),
+  },
+};
+const mono = (txt, title) => "<span class='mono' title='" + esc(title || "") + "'>" + txt + "</span>";
+let currentTab = "events";
+let nextCursor = null;
+
+function renderTabs() {
+  $("tabs").innerHTML = Object.entries(TABS).map(([k, t]) =>
+    "<button data-tab='" + k + "'" + (k === currentTab ? " class='active'" : "") + ">" + t.label + "</button>"
+  ).join("");
+  for (const b of $("tabs").querySelectorAll("button")) b.onclick = () => openTab(b.dataset.tab);
+}
+
+function openTab(key) {
+  currentTab = key;
+  nextCursor = null;
+  renderTabs();
+  const t = TABS[key];
+  const inputs = t.filters.map(([name, label, opts]) =>
+    opts
+      ? "<select id='f_" + name + "'>" + opts.map((o) => "<option value='" + o + "'>" + (o || "any type") + "</option>").join("") + "</select>"
+      : "<input id='f_" + name + "' placeholder='" + esc(label) + "' size='" + Math.max(12, label.length) + "'>"
+  ).join(" ");
+  $("tabbody").innerHTML =
+    "<form class='inline' id='filterform'>" + inputs +
+    " <button type='submit'>Query</button></form>" +
+    "<div id='scanline' class='statusline'></div>" +
+    "<div class='tblwrap'><table id='data'><thead><tr>" +
+    t.head.map((h) => "<th>" + h + "</th>").join("") +
+    "</tr></thead><tbody></tbody></table></div>" +
+    "<button class='plain' id='more' hidden>Load more</button><div id='taberr'></div>";
+  $("filterform").onsubmit = (ev) => { ev.preventDefault(); loadTab(false); };
+  $("more").onclick = () => loadTab(true);
+  loadTab(false);
+}
+
+async function loadTab(more) {
+  const t = TABS[currentTab];
+  $("taberr").innerHTML = "";
+  let qs;
+  if (more && nextCursor) {
+    qs = "?cursor=" + encodeURIComponent(nextCursor);
+  } else {
+    const parts = ["limit=25"];
+    for (const [name] of t.filters) {
+      const v = $("f_" + name)?.value.trim();
+      if (v) parts.push(name + "=" + encodeURIComponent(v));
+    }
+    qs = "?" + parts.join("&");
+  }
+  try {
+    const d = await getJSON(t.path(selected) + qs);
+    const rows = t.rows(d);
+    const html = rows.map((r) => "<tr>" + r.map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
+    const body = $("data").querySelector("tbody");
+    if (more) body.insertAdjacentHTML("beforeend", html);
+    else body.innerHTML = html || "<tr><td colspan='9' class='note'>no rows</td></tr>";
+    nextCursor = d.cursor || null;
+    const hasMore = d.scanStatus === "HAS_MORE" || (currentTab === "state" && d.cursor);
+    $("more").hidden = !hasMore || !nextCursor;
+    $("scanline").textContent = d.scanStatus
+      ? "scanStatus " + d.scanStatus +
+        (d.coverage ? " · indexed " + d.coverage.indexedFromLedger + "–" + d.coverage.indexedToLedger : "")
+      : (d.coverage ? "indexed " + d.coverage.indexedFromLedger + "–" + d.coverage.indexedToLedger : "");
+  } catch (e) { errBox($("taberr"), e); }
+}
+
+/* ---- boot ---- */
+refreshStatus();
+refreshContracts();
+setInterval(refreshStatus, 5000);
+setInterval(refreshContracts, 15000);
+</script>
+</body>
+</html>

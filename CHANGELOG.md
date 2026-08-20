@@ -11,6 +11,14 @@ All notable changes to Sierpe are documented here. The format follows
 - `GET /v1/contracts`: list every registration with its classification
   and kinds, so consumers (and the new UI) can enumerate what the
   instance watches without knowing ids upfront.
+- Embedded management UI at `/`: one self-contained HTML page baked into
+  the binary (no build system, no external assets) covering the whole
+  surface — live instance status, the contract list with classification,
+  coverage and counts, a data explorer with a tab per kind (events,
+  transfers, state and its history, trustlines and theirs) with filters
+  and cursor pagination, and contract registration/unregistration behind
+  an admin-token field the page holds only in memory. Reads work without
+  credentials, matching the open-reads access model.
 
 ## [1.2.0] - 2026-08-20
 
