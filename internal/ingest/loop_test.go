@@ -84,7 +84,7 @@ func (s *fakeStore) LoadCursor(context.Context, string) (store.Cursor, error) {
 	return *s.cursor, nil
 }
 
-func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange, _ []store.Transfer) error {
+func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.committed = append(s.committed, rec)
@@ -106,16 +106,18 @@ func (nopObserver) Observe(uint32, uint32, time.Duration) {}
 
 type nopInstruments struct{}
 
-func (nopInstruments) IncLedgersIngested()          {}
-func (nopInstruments) SetTipLag(time.Duration)      {}
-func (nopInstruments) ObserveCommit(time.Duration)  {}
-func (nopInstruments) IncEventsExtracted(int)       {}
-func (nopInstruments) IncStateChangesExtracted(int) {}
-func (nopInstruments) IncFailedTxs(int)             {}
-func (nopInstruments) IncSuppressedTxs(int)         {}
-func (nopInstruments) IncSuppressedEvents(int)      {}
-func (nopInstruments) IncTransfersExtracted(int)    {}
-func (nopInstruments) IncSuppressedTransfers(int)   {}
+func (nopInstruments) IncLedgersIngested()              {}
+func (nopInstruments) SetTipLag(time.Duration)          {}
+func (nopInstruments) ObserveCommit(time.Duration)      {}
+func (nopInstruments) IncEventsExtracted(int)           {}
+func (nopInstruments) IncStateChangesExtracted(int)     {}
+func (nopInstruments) IncFailedTxs(int)                 {}
+func (nopInstruments) IncSuppressedTxs(int)             {}
+func (nopInstruments) IncSuppressedEvents(int)          {}
+func (nopInstruments) IncTransfersExtracted(int)        {}
+func (nopInstruments) IncSuppressedTransfers(int)       {}
+func (nopInstruments) IncTrustlineChangesExtracted(int) {}
+func (nopInstruments) IncSuppressedTrustlines(int)      {}
 
 // emptyLister backs a registry that watches nothing; extraction over the
 // fake chain ledgers (which carry no transactions) stays a no-op.

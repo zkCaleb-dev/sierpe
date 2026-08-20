@@ -37,7 +37,7 @@ func TestCommitLedgerWithEventsIsIdempotent(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		if err := s.CommitLedger(ctx, "testnet", rec, events, nil, nil); err != nil {
+		if err := s.CommitLedger(ctx, "testnet", rec, events, nil, nil, nil); err != nil {
 			t.Fatalf("CommitLedger() attempt %d error = %v", i+1, err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestQueryEvents(t *testing.T) {
 	// Insert through the real commit path.
 	if err := s.CommitLedger(ctx, "testnet",
 		LedgerRecord{Sequence: 400, Hash: "x", PreviousHash: "y", ClosedAt: time.Now().UTC()},
-		seed, nil, nil); err != nil {
+		seed, nil, nil, nil); err != nil {
 		t.Fatalf("CommitLedger() error = %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestCommitLedgerRollsBackEventsWithCursor(t *testing.T) {
 		testEvent("0000000000000000100-0000000000", "CAAA", "dead", 0),
 		testEvent("0000000000000000100-0000000000", "CBBB", "beef", 0),
 	}
-	if err := s.CommitLedger(ctx, "testnet", rec, events, nil, nil); err == nil {
+	if err := s.CommitLedger(ctx, "testnet", rec, events, nil, nil, nil); err == nil {
 		t.Fatal("CommitLedger() with conflicting ids must fail")
 	}
 

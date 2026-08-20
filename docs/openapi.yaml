@@ -267,6 +267,73 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/contracts/{id}/trustlines:
+    get:
+      tags: [public]
+      summary: Current trustline holders of the SAC asset
+      description: |
+        Live classic trustlines of the asset this SAC wraps, in account
+        order; removed trustlines never appear. Requires the trustlines
+        kind on the registration (opt-in — volume follows the asset's
+        classic activity). Native XLM has no trustlines. Balances and
+        limits are int64 stroop-scale strings.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: account
+          in: query
+          schema: { type: string }
+          description: Exact holder account (G... strkey).
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of live trustlines.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrustlineSnapshotPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/contracts/{id}/trustlines/history:
+    get:
+      tags: [public]
+      summary: Trustline change history of the SAC asset
+      description: |
+        Every trustline change of the wrapped asset in chain order with
+        provenance and before/after balances. Same pagination and honesty
+        contract as the events endpoint: opaque full-query cursors,
+        scanStatus, declared coverage.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: account
+          in: query
+          schema: { type: string }
+          description: Exact holder account (G... strkey).
+        - name: startLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: endLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of changes with scan status and coverage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrustlineHistoryPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       tags: [operational]
@@ -523,6 +590,61 @@ components:
         transfers:
           type: array
           items: { $ref: "#/components/schemas/Transfer" }
+        cursor: { type: string }
+        scanStatus:
+          type: string
+          enum: [HAS_MORE, WAITING_FOR_LEDGERS, OLDEST_REACHED, COMPLETE]
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+
+    TrustlineEntry:
+      type: object
+      properties:
+        accountId: { type: string, description: Trustline holder (G... strkey). }
+        asset: { type: string, description: SEP-0011 canonical CODE:ISSUER. }
+        balance: { type: string, description: int64 stroop-scale balance. }
+        limit: { type: string, description: int64 stroop-scale trust limit. }
+        flags: { type: integer, description: Trustline authorization flags. }
+        lastModifiedLedger: { type: integer }
+        closedAt: { type: string, format: date-time }
+
+    TrustlineSnapshotPage:
+      type: object
+      properties:
+        trustlines:
+          type: array
+          items: { $ref: "#/components/schemas/TrustlineEntry" }
+        cursor:
+          type: string
+          description: Present only when more trustlines exist.
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+
+    TrustlineChange:
+      type: object
+      properties:
+        id: { type: string, description: "{toid}-{change_index}, sortable." }
+        ledger: { type: integer }
+        ledgerClosedAt: { type: string, format: date-time }
+        contractId: { type: string }
+        accountId: { type: string }
+        asset: { type: string }
+        changeType: { type: string, enum: [created, updated, removed, restored] }
+        preBalance: { type: string, description: Balance before (absent on create). }
+        postBalance: { type: string, description: Balance after (absent on remove). }
+        preLimit: { type: string }
+        postLimit: { type: string }
+        flags: { type: integer }
+        txHash: { type: string }
+        txIndex: { type: integer }
+        opIndex: { type: integer }
+
+    TrustlineHistoryPage:
+      type: object
+      properties:
+        changes:
+          type: array
+          items: { $ref: "#/components/schemas/TrustlineChange" }
         cursor: { type: string }
         scanStatus:
           type: string
