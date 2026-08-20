@@ -6,7 +6,14 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- With `HTTP_BASIC_AUTH` enabled, admin mutations were impossible: the
+  Basic credentials and the admin bearer token share the one
+  Authorization header, so a request could never satisfy both layers
+  (found by the first real user on the first real deployment). The gate
+  now also accepts the admin bearer token as a valid credential — it is
+  the higher-privilege secret and its own handler still validates it.
 
 ## [1.4.0] - 2026-08-20
 

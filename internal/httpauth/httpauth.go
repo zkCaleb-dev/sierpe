@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
+	"strings"
 )
 
 // probePaths are reachable without credentials: orchestrator health checks
@@ -18,22 +19,34 @@ var probePaths = map[string]bool{
 	"/ready":  true,
 }
 
-// Wrap requires Basic credentials on every path except the orchestrator
-// probes. Comparison is constant-time over fixed-size digests so neither
-// user nor password length leaks.
-func Wrap(next http.Handler, user, password string) http.Handler {
+// Wrap requires credentials on every path except the orchestrator probes:
+// either the Basic user and password, or the admin bearer token. The
+// bearer alternative exists because Basic and Bearer share the one
+// Authorization header — an admin mutation carrying its bearer token
+// physically cannot also carry the Basic credentials, and the admin token
+// is the higher-privilege credential anyway (its own handler validates it
+// again). Comparisons are constant-time over fixed-size digests so no
+// credential length leaks.
+func Wrap(next http.Handler, user, password, adminToken string) http.Handler {
 	wantUser := sha256.Sum256([]byte(user))
 	wantPass := sha256.Sum256([]byte(password))
+	wantAdmin := sha256.Sum256([]byte(adminToken))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if probePaths[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gotUser, gotPass, ok := r.BasicAuth()
-		if ok {
+		if gotUser, gotPass, ok := r.BasicAuth(); ok {
 			u := sha256.Sum256([]byte(gotUser))
 			p := sha256.Sum256([]byte(gotPass))
 			if subtle.ConstantTimeCompare(u[:], wantUser[:])&subtle.ConstantTimeCompare(p[:], wantPass[:]) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && adminToken != "" {
+			b := sha256.Sum256([]byte(bearer))
+			if subtle.ConstantTimeCompare(b[:], wantAdmin[:]) == 1 {
 				next.ServeHTTP(w, r)
 				return
 			}

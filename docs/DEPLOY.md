@@ -42,8 +42,10 @@ postures, both first-class:
   and every request — the embedded UI, the API, `/metrics` — requires the
   credentials. Browsers prompt natively; programmatic clients send the
   standard header (`curl -u user:password …`, Prometheus `basic_auth` in
-  the scrape config). Works from any network. Admin mutations additionally
-  require the `ADMIN_TOKEN` bearer, as always.
+  the scrape config). Works from any network. Admin mutations authenticate
+  with the `ADMIN_TOKEN` bearer, which the gate accepts on its own
+  (Basic and Bearer share the one Authorization header, so a mutation
+  cannot carry both).
 
 ## Docker Compose (local, VPS)
 
