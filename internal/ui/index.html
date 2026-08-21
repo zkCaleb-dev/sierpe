@@ -285,7 +285,12 @@ $("regbtn").onclick = async () => {
     });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(b.error || r.status + " " + r.statusText);
-    $("regmsg").innerHTML = "<p class='note'>registered as <b>" + esc(b.classification?.type) + "</b> with kinds " + b.kinds.map(esc).join(", ") + "</p>";
+    let note = "<p class='note'>registered as <b>" + esc(b.classification?.type) + "</b> with kinds " + b.kinds.map(esc).join(", ") + "</p>";
+    if (b.classification?.type !== "sac" && b.kinds.includes("trustlines")) {
+      note += "<div class='err'>Heads up: trustlines only applies to SAC contracts (classic assets). A " +
+        esc(b.classification?.type) + " contract will never produce trustline rows.</div>";
+    }
+    $("regmsg").innerHTML = note;
     $("regid").value = "";
     refreshContracts();
     selectContract(b.contract_id);
@@ -393,6 +398,20 @@ function openTab(key) {
   loadTab(false);
 }
 
+// emptyHint explains the most common surprise behind an empty page: asset
+// movements (plain payments) are recorded under the ASSET's own contract,
+// not under whoever received the money. Learned from the first user's
+// first test session.
+function emptyHint() {
+  let hint = "no rows";
+  if (currentTab === "events" || currentTab === "transfers") {
+    hint += " — tip: sending an asset TO a contract records a transfer under the " +
+      "asset's own SAC contract (e.g. XLM movements live under the XLM SAC), not under " +
+      "the recipient. Events appear here only when this contract's functions are invoked.";
+  }
+  return "<tr><td colspan='9' class='note'>" + hint + "</td></tr>";
+}
+
 async function loadTab(more) {
   const t = TABS[currentTab];
   $("taberr").innerHTML = "";
@@ -413,7 +432,7 @@ async function loadTab(more) {
     const html = rows.map((r) => "<tr>" + r.map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
     const body = $("data").querySelector("tbody");
     if (more) body.insertAdjacentHTML("beforeend", html);
-    else body.innerHTML = html || "<tr><td colspan='9' class='note'>no rows</td></tr>";
+    else body.innerHTML = html || emptyHint();
     nextCursor = d.cursor || null;
     const hasMore = d.scanStatus === "HAS_MORE" || (currentTab === "state" && d.cursor);
     $("more").hidden = !hasMore || !nextCursor;

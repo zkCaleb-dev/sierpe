@@ -6,7 +6,13 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- UI: registering a non-SAC contract with the trustlines kind now warns
+  that the kind only applies to classic assets, and empty events or
+  transfers pages explain that plain payments are recorded under the
+  asset's own SAC contract — both straight from the first user's test
+  session.
 
 ## [1.4.2] - 2026-08-20
 
