@@ -17,6 +17,30 @@ type Backfill struct {
 	// ClampedAt is the oldest ledger actually served when the retention wall
 	// cut the walk short; nil when no clamp happened (yet).
 	ClampedAt *uint32
+	// CoveredKinds are the kinds this walk derives. A kind outside this set
+	// has no history below the walk's anchor, however finished the walk
+	// looks — the API must not vouch for it (rule 7).
+	CoveredKinds []string
+}
+
+// CoversKind reports whether the walk derives kind.
+func (b Backfill) CoversKind(kind string) bool {
+	for _, k := range b.CoveredKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// coversAll reports whether every wanted kind is already covered.
+func (b Backfill) coversAll(kinds []string) bool {
+	for _, k := range kinds {
+		if !b.CoversKind(k) {
+			return false
+		}
+	}
+	return true
 }
 
 // BackfillJob couples pending backfill state with its contract registration
@@ -29,27 +53,35 @@ type BackfillJob struct {
 // ErrNoBackfill is returned when a contract has no backfill row.
 var ErrNoBackfill = errors.New("store: no backfill for contract")
 
-// EnsureBackfill reconciles a contract's backfill target (idempotent, admin
-// doctrine). A first registration creates the row walking down from nextTo;
-// re-registering with an older target extends the walk and reopens it;
-// anything else preserves progress untouched.
-func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32) error {
+// EnsureBackfill reconciles a contract's backfill target and covered kinds
+// (idempotent, admin doctrine). A first registration creates the row walking
+// down from nextTo. Re-registering extends the walk when the target moved
+// older, and REOPENS it when a kind was added: the finished walk never
+// derived that kind, so its history has to be walked again rather than
+// silently declared covered (rule 7). Everything else preserves progress.
+//
+// A reopened walk restarts at the current anchor, so while it runs the
+// declared coverage of the already-covered kinds temporarily narrows to the
+// moving frontier. That is conservative, never a lie, and it heals as the
+// walk descends; the alternative (two watermarks) buys precision during a
+// rare operation at the cost of a second thing that can be wrong.
+func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32, kinds []string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var current Backfill
 		err := tx.QueryRow(ctx, `
-			SELECT target_from, next_to, done FROM backfill
+			SELECT target_from, next_to, done, covered_kinds FROM backfill
 			WHERE network = $1 AND contract_id = $2
 			FOR UPDATE`,
 			network, contractID,
-		).Scan(&current.TargetFrom, &current.NextTo, &current.Done)
+		).Scan(&current.TargetFrom, &current.NextTo, &current.Done, &current.CoveredKinds)
 
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			done := nextTo < targetFrom
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO backfill (network, contract_id, target_from, next_to, done)
-				VALUES ($1, $2, $3, $4, $5)`,
-				network, contractID, int64(targetFrom), int64(nextTo), done,
+				INSERT INTO backfill (network, contract_id, target_from, next_to, done, covered_kinds)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+				network, contractID, int64(targetFrom), int64(nextTo), done, kinds,
 			); err != nil {
 				return fmt.Errorf("store: create backfill: %w", err)
 			}
@@ -58,14 +90,28 @@ func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, 
 			return fmt.Errorf("store: read backfill: %w", err)
 		}
 
-		if targetFrom >= current.TargetFrom {
+		extends := targetFrom < current.TargetFrom
+		newKinds := !current.coversAll(kinds)
+		if !extends && !newKinds {
 			return nil // nothing new requested; keep progress
+		}
+
+		target := current.TargetFrom
+		if extends {
+			target = targetFrom
+		}
+		// A new kind has no history at all below the anchor, so the walk
+		// restarts from the anchor; extending only moves the floor.
+		next := current.NextTo
+		if newKinds {
+			next = nextTo
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE backfill
-			SET target_from = $3, done = false, clamped_at = NULL, updated_at = now()
+			SET target_from = $3, next_to = $4, done = false, clamped_at = NULL,
+			    covered_kinds = $5, updated_at = now()
 			WHERE network = $1 AND contract_id = $2`,
-			network, contractID, int64(targetFrom),
+			network, contractID, int64(target), int64(next), kinds,
 		); err != nil {
 			return fmt.Errorf("store: extend backfill: %w", err)
 		}
@@ -79,10 +125,10 @@ func (s *Store) GetBackfill(ctx context.Context, network, contractID string) (Ba
 	var target, next int64
 	var clamped *int64
 	err := s.pool.QueryRow(ctx, `
-		SELECT target_from, next_to, done, clamped_at FROM backfill
+		SELECT target_from, next_to, done, clamped_at, covered_kinds FROM backfill
 		WHERE network = $1 AND contract_id = $2`,
 		network, contractID,
-	).Scan(&target, &next, &b.Done, &clamped)
+	).Scan(&target, &next, &b.Done, &clamped, &b.CoveredKinds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrNoBackfill
 	}

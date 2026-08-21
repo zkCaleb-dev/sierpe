@@ -229,7 +229,9 @@ async function selectContract(id) {
   $("dinfo").innerHTML = "<p class='note'>loading…</p>";
   try {
     const d = await getJSON("/v1/contracts/" + id);
-    const cov = d.coverage;
+    // Coverage is per kind: a contract does not have one range, its kinds do.
+    coverageByKind = {};
+    for (const c of d.coverage || []) coverageByKind[c.kind] = c;
     const evs = (d.classification?.events || []).map(esc).join(", ");
     const counts = Object.entries(d.events?.by_name || d.events?.byName || {})
       .map(([k, v]) => esc(k || "(unnamed)") + ": " + v).join(" · ");
@@ -238,9 +240,12 @@ async function selectContract(id) {
       " · kinds: <b>" + d.kinds.map(esc).join(", ") + "</b>" +
       " · registered " + when(d.registered_at) + "</div>" +
       (evs ? "<div class='statusline'>declared events: " + evs + "</div>" : "") +
-      "<div class='statusline'>coverage: ledgers <b class='mono'>" + cov.indexedFromLedger + " – " + cov.indexedToLedger + "</b>" +
-      (cov.backfillPending ? " <span class='badge warn'>backfill running</span>" : " <span class='badge'>backfill done</span>") +
-      (cov.clampedAt ? " <span class='badge warn'>clamped at " + cov.clampedAt + "</span>" : "") + "</div>" +
+      (d.coverage || []).map((cov) =>
+        "<div class='statusline'>coverage <b>" + esc(cov.kind) + "</b>: ledgers <b class='mono'>" +
+        cov.indexedFromLedger + " – " + cov.indexedToLedger + "</b>" +
+        (cov.backfillPending ? " <span class='badge warn'>backfill running</span>" : " <span class='badge'>backfill done</span>") +
+        (cov.clampedAt ? " <span class='badge warn'>clamped at " + cov.clampedAt + "</span>" : "") + "</div>"
+      ).join("") +
       "<div class='statusline'>stored: <b>" + (d.events?.total ?? 0) + "</b> events · <b>" + (d.state?.entries ?? 0) + "</b> live state entries" +
       (counts ? " — " + counts : "") + "</div>" +
       "<p><button class='plain' id='unreg'>Unregister this contract</button> <span class='note'>data is kept; re-registering resumes</span></p>" +
@@ -366,6 +371,7 @@ const TABS = {
 };
 const mono = (txt, title) => "<span class='mono' title='" + esc(title || "") + "'>" + txt + "</span>";
 let currentTab = "events";
+let coverageByKind = {};
 let nextCursor = null;
 
 function renderTabs() {
@@ -436,10 +442,16 @@ async function loadTab(more) {
     nextCursor = d.cursor || null;
     const hasMore = d.scanStatus === "HAS_MORE" || (currentTab === "state" && d.cursor);
     $("more").hidden = !hasMore || !nextCursor;
-    $("scanline").textContent = d.scanStatus
-      ? "scanStatus " + d.scanStatus +
-        (d.coverage ? " · indexed " + d.coverage.indexedFromLedger + "–" + d.coverage.indexedToLedger : "")
-      : (d.coverage ? "indexed " + d.coverage.indexedFromLedger + "–" + d.coverage.indexedToLedger : "");
+    const cov = d.coverage;
+    let line = d.scanStatus ? "scanStatus " + d.scanStatus : "";
+    if (cov && cov.kindDerived === false) {
+      line = "this contract does not derive the " + cov.kind +
+        " kind — nothing was ever indexed here, which is not the same as nothing having happened";
+    } else if (cov) {
+      line += (line ? " · " : "") + "indexed " + cov.indexedFromLedger + "–" + cov.indexedToLedger +
+        (cov.backfillPending ? " (backfill running)" : "");
+    }
+    $("scanline").textContent = line;
   } catch (e) { errBox($("taberr"), e); }
 }
 

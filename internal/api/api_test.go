@@ -105,9 +105,11 @@ func defaultContractReader() *fakeContractReader {
 	return &fakeContractReader{
 		contract: store.Contract{
 			Network: "testnet", ContractID: registered, Source: store.SourceAPI,
-			Kinds: []string{store.KindEvents}, RegisteredAt: time.Unix(1_700_000_000, 0),
+			Kinds:        []string{store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines},
+			RegisteredAt: time.Unix(1_700_000_000, 0),
 		},
-		backfill: store.Backfill{ContractID: registered, TargetFrom: 1, NextTo: 999, Done: true},
+		backfill: store.Backfill{ContractID: registered, TargetFrom: 1, NextTo: 999, Done: true,
+			CoveredKinds: []string{store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines}},
 	}
 }
 
@@ -336,8 +338,15 @@ func TestContractDetail(t *testing.T) {
 	if err := json.Unmarshal(detail.Classification, &cls); err != nil || cls["type"] != "wasm" {
 		t.Errorf("classification = %s", detail.Classification)
 	}
-	if detail.Coverage.IndexedFromLedger != 1000 || detail.Coverage.IndexedToLedger != 6000 {
-		t.Errorf("coverage = %+v", detail.Coverage)
+	if len(detail.Coverage) != len(cr.contract.Kinds) {
+		t.Fatalf("coverage must carry one declaration per registered kind, got %+v", detail.Coverage)
+	}
+	cov := detail.Coverage[0]
+	if cov.Kind != store.KindEvents || !cov.KindDerived {
+		t.Errorf("coverage kind = %+v", cov)
+	}
+	if cov.IndexedFromLedger != 1000 || cov.IndexedToLedger != 6000 {
+		t.Errorf("coverage = %+v", cov)
 	}
 
 	if code := getJSON(t, srv.URL+"/v1/contracts/CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", nil); code != 404 {
@@ -527,5 +536,52 @@ func TestContractList(t *testing.T) {
 	}
 	if got.RegisteredAt == "" {
 		t.Error("registered_at must be set")
+	}
+}
+
+func TestCoverageRefusesToVouchForAnUnregisteredKind(t *testing.T) {
+	// The contract derives events only: its transfers page is empty because
+	// nothing was ever derived, not because nothing happened. Rule 7 says the
+	// response has to carry that difference.
+	cr := defaultContractReader()
+	cr.contract.Kinds = []string{store.KindEvents}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithTransfers(ev, cr, &fakeTransfersReader{})
+	defer srv.Close()
+
+	var resp transfersResponse
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/transfers", &resp); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if resp.Coverage.KindDerived {
+		t.Error("kindDerived must be false for a kind the registration does not derive")
+	}
+	if resp.Coverage.IndexedFromLedger != 0 || resp.Coverage.IndexedToLedger != 0 {
+		t.Errorf("an underived kind must vouch for nothing, got %+v", resp.Coverage)
+	}
+}
+
+func TestCoverageRefusesToVouchForAKindAddedAfterTheWalk(t *testing.T) {
+	// The kind is registered but the finished walk never derived it: history
+	// below the anchor is not covered, and saying otherwise is the bug this
+	// whole change exists to prevent.
+	cr := defaultContractReader()
+	cr.backfill.CoveredKinds = []string{store.KindEvents}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithTransfers(ev, cr, &fakeTransfersReader{})
+	defer srv.Close()
+
+	var resp transfersResponse
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/transfers", &resp); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if !resp.Coverage.KindDerived {
+		t.Error("the kind IS registered; kindDerived must be true")
+	}
+	if resp.Coverage.IndexedFromLedger != 6000 {
+		t.Errorf("coverage must start at the anchor, not at the walk floor: %+v", resp.Coverage)
+	}
+	if !resp.Coverage.BackfillPending {
+		t.Error("a kind awaiting its reopened walk must report backfillPending")
 	}
 }

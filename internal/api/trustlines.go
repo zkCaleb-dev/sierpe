@@ -47,10 +47,11 @@ type trustlineSnapshotResponse struct {
 }
 
 func (s *Server) handleTrustlineSnapshot(w http.ResponseWriter, r *http.Request, trustlines trustlinesReader) {
-	contractID, ok := s.knownContract(w, r)
+	contract, ok := s.knownContract(w, r)
 	if !ok {
 		return
 	}
+	contractID := contract.ContractID
 
 	q := store.TrustlineQuery{ContractID: contractID, Limit: defaultLimit}
 	params := r.URL.Query()
@@ -86,7 +87,7 @@ func (s *Server) handleTrustlineSnapshot(w http.ResponseWriter, r *http.Request,
 
 	resp := trustlineSnapshotResponse{
 		Trustlines: make([]trustlineEntryRecord, 0, len(entries)),
-		Coverage: s.coverage(r.Context(), contractID,
+		Coverage: s.coverage(r.Context(), contract, store.KindTrustlines,
 			store.EventQuery{ContractID: contractID, FromLedger: 1}, cursorSeq),
 		LatestLedger: cursorSeq,
 	}
@@ -137,10 +138,11 @@ type trustlineHistoryResponse struct {
 }
 
 func (s *Server) handleTrustlineHistory(w http.ResponseWriter, r *http.Request, trustlines trustlinesReader) {
-	contractID, ok := s.knownContract(w, r)
+	contract, ok := s.knownContract(w, r)
 	if !ok {
 		return
 	}
+	contractID := contract.ContractID
 
 	q := store.TrustlineQuery{ContractID: contractID, FromLedger: 1, Limit: defaultLimit}
 	params := r.URL.Query()
@@ -191,7 +193,7 @@ func (s *Server) handleTrustlineHistory(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	cursorSeq := s.cursorSequence(r.Context())
-	coverage := s.coverage(r.Context(), contractID,
+	coverage := s.coverage(r.Context(), contract, store.KindTrustlines,
 		store.EventQuery{ContractID: contractID, FromLedger: q.FromLedger, ToLedger: q.ToLedger}, cursorSeq)
 
 	if len(changes) > 0 {

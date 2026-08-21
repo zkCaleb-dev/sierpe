@@ -6,7 +6,29 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Coverage is now declared per **(contract, kind)** instead of per
+  contract. A backfill walk only derives the kinds the registration
+  carried while it ran, so adding a kind to an existing registration left
+  its history underived while the API kept declaring `COMPLETE` over
+  ledgers it had never looked at for that kind — a rule 7 violation
+  reachable by a one-word edit. Now the walk records `covered_kinds`
+  (migration 0009), adding a kind reopens the walk at the current anchor,
+  and every coverage object names its `kind` and says whether the
+  registration derives it at all (`kindDerived`). An endpoint whose kind
+  is not derived vouches for nothing instead of implying emptiness means
+  absence.
+- `docs/openapi.yaml` declared `/v1/contracts` twice (one mapping key for
+  POST, another for GET); a strict YAML parser kept only the second, so
+  the registration endpoint vanished from generated clients.
+
 ### Changed
+
+- **Breaking (read API):** `GET /v1/contracts/{id}` now returns `coverage`
+  as an array with one declaration per registered kind, rather than a
+  single object. Per-page coverage on the other endpoints keeps its shape
+  and gains the `kind` and `kindDerived` fields.
 
 - UI: registering a non-SAC contract with the trustlines kind now warns
   that the kind only applies to classic assets, and empty events or

@@ -89,7 +89,7 @@ func (f *fakePlanner) LoadCursor(context.Context, string) (store.Cursor, error) 
 	return f.cursor, nil
 }
 
-func (f *fakePlanner) EnsureBackfill(_ context.Context, _ string, contractID string, targetFrom, nextTo uint32) error {
+func (f *fakePlanner) EnsureBackfill(_ context.Context, _ string, contractID string, targetFrom, nextTo uint32, kinds []string) error {
 	if f.ensureErr != nil {
 		return f.ensureErr
 	}

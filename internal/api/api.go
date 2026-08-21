@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/stellar/go-stellar-sdk/strkey"
 	"github.com/stellar/go-stellar-sdk/xdr"
 
 	"github.com/zkCaleb-dev/sierpe/internal/store"
@@ -74,6 +73,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 // coverageInfo declares which part of the request the response can vouch
 // for. A range Sierpe cannot vouch for is stated, never implied (rule 7).
 type coverageInfo struct {
+	// Kind names the data kind this declaration is about: coverage is a
+	// property of (contract, kind), never of a contract alone — a kind the
+	// registration does not derive has no history at all, however finished
+	// the contract's walk looks.
+	Kind                string  `json:"kind"`
+	KindDerived         bool    `json:"kindDerived"`
 	RequestedFromLedger uint32  `json:"requestedFromLedger"`
 	RequestedToLedger   *uint32 `json:"requestedToLedger"` // null = follow the tip
 	IndexedFromLedger   uint32  `json:"indexedFromLedger"`
@@ -106,21 +111,11 @@ type eventsResponse struct {
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	contractID := r.PathValue("id")
-	if !strkey.IsValidContractAddress(contractID) {
-		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("contract id %q is not a valid contract address (C... strkey)", contractID))
+	contract, ok := s.knownContract(w, r)
+	if !ok {
 		return
 	}
-	if _, err := s.contracts.GetContract(r.Context(), s.network, contractID); err != nil {
-		if errors.Is(err, store.ErrNoContract) {
-			writeError(w, http.StatusNotFound,
-				fmt.Sprintf("contract %s is not registered; register it via POST /v1/contracts", contractID))
-			return
-		}
-		s.serverError(w, "contract lookup failed", err)
-		return
-	}
+	contractID := contract.ContractID
 
 	q, err := s.buildQuery(r, contractID)
 	if err != nil {
@@ -141,7 +136,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "cursor read failed", err)
 		return
 	}
-	coverage := s.coverage(r.Context(), contractID, q, cursorSeq)
+	coverage := s.coverage(r.Context(), contract, store.KindEvents, q, cursorSeq)
 
 	afterID := q.AfterID
 	if len(events) > 0 {
@@ -238,8 +233,10 @@ func (s *Server) buildQuery(r *http.Request, contractID string) (store.EventQuer
 // coverage derives the vouchable range from backfill state and the live
 // cursor (docs/DESIGN.md §4: coverage is computed from persisted state,
 // never guessed).
-func (s *Server) coverage(ctx context.Context, contractID string, q store.EventQuery, cursorSeq uint32) coverageInfo {
+func (s *Server) coverage(ctx context.Context, contract store.Contract, kind string, q store.EventQuery, cursorSeq uint32) coverageInfo {
 	cov := coverageInfo{
+		Kind:                kind,
+		KindDerived:         contract.HasKind(kind),
 		RequestedFromLedger: q.FromLedger,
 		IndexedToLedger:     cursorSeq,
 	}
@@ -250,8 +247,16 @@ func (s *Server) coverage(ctx context.Context, contractID string, q store.EventQ
 			cov.IndexedToLedger = to
 		}
 	}
+	if !cov.KindDerived {
+		// Nothing was ever derived for this kind: an empty page here means
+		// "not indexed", not "never happened", and the response has to say
+		// which (rule 7).
+		cov.IndexedFromLedger = 0
+		cov.IndexedToLedger = 0
+		return cov
+	}
 
-	bf, err := s.contracts.GetBackfill(ctx, s.network, contractID)
+	bf, err := s.contracts.GetBackfill(ctx, s.network, contract.ContractID)
 	switch {
 	case errors.Is(err, store.ErrNoBackfill):
 		// Registration without a walk (should not happen); vouch for nothing
@@ -259,6 +264,11 @@ func (s *Server) coverage(ctx context.Context, contractID string, q store.EventQ
 		cov.IndexedFromLedger = cursorSeq
 	case err != nil:
 		cov.IndexedFromLedger = cursorSeq
+	case !bf.CoversKind(kind):
+		// The kind was added after this walk ran, and the walk has not been
+		// reopened yet: below the anchor nothing was derived for it.
+		cov.IndexedFromLedger = cursorSeq
+		cov.BackfillPending = true
 	default:
 		cov.IndexedFromLedger = bf.NextTo + 1
 		cov.BackfillPending = !bf.Done
@@ -268,6 +278,21 @@ func (s *Server) coverage(ctx context.Context, contractID string, q store.EventQ
 		cov.IndexedFromLedger = q.FromLedger
 	}
 	return cov
+}
+
+// coverageByKind declares coverage for every kind the registration derives,
+// in a stable order so a client can diff two responses.
+func (s *Server) coverageByKind(ctx context.Context, contract store.Contract, cursorSeq uint32) []coverageInfo {
+	q := store.EventQuery{ContractID: contract.ContractID, FromLedger: 1}
+	out := make([]coverageInfo, 0, len(contract.Kinds))
+	for _, kind := range []string{
+		store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines,
+	} {
+		if contract.HasKind(kind) {
+			out = append(out, s.coverage(ctx, contract, kind, q, cursorSeq))
+		}
+	}
+	return out
 }
 
 // scanStatus reports how the scan of the requested range ended, with the
@@ -289,15 +314,17 @@ func scanStatus(hasMore bool, q store.EventQuery, cov coverageInfo, cursorSeq ui
 // --- contract detail --------------------------------------------------------
 
 type contractDetail struct {
-	ContractID     string           `json:"contract_id"`
-	Network        string           `json:"network"`
-	Source         string           `json:"source"`
-	Kinds          []string         `json:"kinds"`
-	Classification json.RawMessage  `json:"classification"`
-	RegisteredAt   string           `json:"registered_at"`
-	Coverage       coverageInfo     `json:"coverage"`
-	Events         contractEventAgg `json:"events"`
-	State          contractStateAgg `json:"state"`
+	ContractID     string          `json:"contract_id"`
+	Network        string          `json:"network"`
+	Source         string          `json:"source"`
+	Kinds          []string        `json:"kinds"`
+	Classification json.RawMessage `json:"classification"`
+	RegisteredAt   string          `json:"registered_at"`
+	// Coverage carries one declaration per registered kind: a contract does
+	// not have a coverage, its (contract, kind) pairs do.
+	Coverage []coverageInfo   `json:"coverage"`
+	Events   contractEventAgg `json:"events"`
+	State    contractStateAgg `json:"state"`
 }
 
 type contractEventAgg struct {
@@ -310,22 +337,11 @@ type contractStateAgg struct {
 }
 
 func (s *Server) handleContract(w http.ResponseWriter, r *http.Request) {
-	contractID := r.PathValue("id")
-	if !strkey.IsValidContractAddress(contractID) {
-		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("contract id %q is not a valid contract address (C... strkey)", contractID))
+	contract, ok := s.knownContract(w, r)
+	if !ok {
 		return
 	}
-	contract, err := s.contracts.GetContract(r.Context(), s.network, contractID)
-	if errors.Is(err, store.ErrNoContract) {
-		writeError(w, http.StatusNotFound,
-			fmt.Sprintf("contract %s is not registered; register it via POST /v1/contracts", contractID))
-		return
-	}
-	if err != nil {
-		s.serverError(w, "contract lookup failed", err)
-		return
-	}
+	contractID := contract.ContractID
 
 	cursorSeq := uint32(0)
 	if cur, err := s.events.LoadCursor(r.Context(), s.network); err == nil {
@@ -353,10 +369,9 @@ func (s *Server) handleContract(w http.ResponseWriter, r *http.Request) {
 		Kinds:          contract.Kinds,
 		Classification: contract.Classification,
 		RegisteredAt:   contract.RegisteredAt.UTC().Format(time.RFC3339),
-		Coverage: s.coverage(r.Context(), contractID,
-			store.EventQuery{ContractID: contractID, FromLedger: 1}, cursorSeq),
-		Events: contractEventAgg{Total: total, ByName: counts},
-		State:  contractStateAgg{Entries: stateEntries},
+		Coverage:       s.coverageByKind(r.Context(), contract, cursorSeq),
+		Events:         contractEventAgg{Total: total, ByName: counts},
+		State:          contractStateAgg{Entries: stateEntries},
 	}
 	writeJSON(w, http.StatusOK, detail)
 }
