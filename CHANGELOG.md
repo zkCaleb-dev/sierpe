@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-21
+
 ### Fixed
 
 - **A backfill could stall permanently on a busy ledger range.** The RPC
