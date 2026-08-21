@@ -20,6 +20,17 @@ import (
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
 
+// scope is the per-ledger decision of what the registry makes worth doing,
+// computed once from the snapshot instead of re-derived per transaction.
+type scope struct {
+	// assets memoizes asset-to-SAC derivation; non-nil only when some
+	// registration derives trustlines.
+	assets *assetContracts
+	// wantMovements is true when some registration derives movements, which
+	// is the only derivation that inspects events from unwatched emitters.
+	wantMovements bool
+}
+
 // Result carries the extracted records plus the distrust counters (rule 6:
 // everything suppressed is counted, never silently dropped).
 type Result struct {
@@ -27,6 +38,7 @@ type Result struct {
 	StateChanges     []store.StateChange
 	Transfers        []store.Transfer
 	TrustlineChanges []store.TrustlineChange
+	Movements        []store.Movement
 	// FailedTxs counts transactions skipped because they did not succeed;
 	// their events and state changes never happened. Routine traffic.
 	FailedTxs int
@@ -45,6 +57,16 @@ type Result struct {
 	// SuppressedTrustlines counts watched trustline changes that could not
 	// be read. Same alarm semantics as SuppressedEvents.
 	SuppressedTrustlines int
+	// ForeignUndecodable counts movement-named events that did not decode,
+	// emitted by token contracts whose transfers this instance does not
+	// index. Expected to be nonzero on an open network — anyone can emit an
+	// event called "transfer" carrying anything, aimed at any address — so
+	// it is reported but never alerted on, which is what keeps the
+	// suppression counters above meaningful. The flip side is real: a
+	// genuinely non-standard token moving value into a watched contract
+	// lands in this same bucket, and the endpoint documents that movements
+	// are not a balance for exactly that reason.
+	ForeignUndecodable int
 }
 
 // Events extracts every event emitted by watched contracts in one ledger.
@@ -65,11 +87,12 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 	seq := uint32(header.LedgerSeq)
 	closedAt := time.Unix(int64(header.ScpValue.CloseTime), 0).UTC()
 
-	// The asset cache and the wanted check live at ledger scope: when no
-	// registration derives trustlines, the trustline pass costs nothing.
-	var assets *assetContracts
+	// What the registry makes worth doing is decided once per ledger, not
+	// per transaction: when nothing derives trustlines or movements, those
+	// passes cost nothing at all.
+	sc := scope{wantMovements: watch.AnyKind(store.KindMovements)}
 	if watch.AnyKind(store.KindTrustlines) {
-		assets = newAssetContracts(passphrase)
+		sc.assets = newAssetContracts(passphrase)
 	}
 
 	for {
@@ -83,7 +106,7 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 			res.SuppressedTxs++
 			continue
 		}
-		processTx(tx, seq, closedAt, watch, assets, &res)
+		processTx(tx, seq, closedAt, watch, sc, &res)
 	}
 	return res, nil
 }
@@ -92,7 +115,7 @@ func Events(lcm xdr.LedgerCloseMeta, passphrase string, watch *registry.Snapshot
 // res. The recover frontier lives here: SDK XDR getters panic on nil
 // unions, and one hostile transaction must cost exactly one transaction
 // (counted), not the ledger.
-func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, assets *assetContracts, res *Result) {
+func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, sc scope, res *Result) {
 	defer func() {
 		if r := recover(); r != nil {
 			res.SuppressedTxs++
@@ -105,8 +128,8 @@ func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watc
 		res.FailedTxs++
 		return
 	}
-	eventsOK := txEvents(tx, seq, closedAt, watch, res)
-	stateOK := txLedgerChanges(tx, seq, closedAt, watch, assets, res)
+	eventsOK := txEvents(tx, seq, closedAt, watch, sc, res)
+	stateOK := txLedgerChanges(tx, seq, closedAt, watch, sc.assets, res)
 	// One broken transaction is one suppression, however many extractors
 	// tripped over it.
 	if !eventsOK || !stateOK {
@@ -116,7 +139,7 @@ func processTx(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watc
 
 // txEvents appends the transaction's watched contract events; ok=false
 // means the meta could not be read.
-func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, res *Result) bool {
+func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch *registry.Snapshot, sc scope, res *Result) bool {
 	events, err := tx.GetTransactionEvents()
 	if err != nil {
 		return false
@@ -141,10 +164,7 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 				continue
 			}
 			contract, watched := watch.Get(contractID)
-			if !watched {
-				continue
-			}
-			if contract.HasKind(store.KindEvents) {
+			if watched && contract.HasKind(store.KindEvents) {
 				record, err := buildEvent(ev, contractID, seq, closedAt, txHash, int32(tx.Index), int32(opIndex), eventIndex, prefix)
 				if err != nil {
 					res.SuppressedEvents++
@@ -152,25 +172,51 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 					res.Events = append(res.Events, record)
 				}
 			}
-			if contract.HasKind(store.KindTransfers) {
-				body, ok := ev.Body.GetV0()
-				if !ok || len(body.Topics) == 0 {
-					continue
-				}
-				sym, ok := body.Topics[0].GetSym()
-				if !ok {
-					continue
-				}
-				transferType, isMovement := transferEventNames[string(sym)]
-				if !isMovement {
-					continue
-				}
-				record, err := buildTransfer(body, transferType, contractID, seq, closedAt, txHash, int32(tx.Index), int32(opIndex), eventIndex, prefix)
-				if err != nil {
+
+			// Token movements are the one derivation NOT gated on the
+			// emitter being watched: a payment into a watched contract is
+			// emitted by the asset's own SAC, which the operator has no
+			// reason to register. Everything below therefore runs for
+			// foreign tokens too, so each guard is ordered cheapest-first.
+			emitsTransfers := watched && contract.HasKind(store.KindTransfers)
+			if !emitsTransfers && !sc.wantMovements {
+				continue
+			}
+			body, ok := ev.Body.GetV0()
+			if !ok || len(body.Topics) == 0 {
+				continue
+			}
+			sym, ok := body.Topics[0].GetSym()
+			if !ok {
+				continue
+			}
+			transferType, isMovement := transferEventNames[string(sym)]
+			if !isMovement {
+				continue
+			}
+			wantMovements := sc.wantMovements && participatesWatched(body, watch)
+			if !emitsTransfers && !wantMovements {
+				continue
+			}
+
+			record, err := buildTransfer(body, transferType, contractID, seq, closedAt, txHash, int32(tx.Index), int32(opIndex), eventIndex, prefix)
+			if err != nil {
+				// A watched emitter failing to decode is counted data loss
+				// and alerts; a foreign token doing so is a decoder that
+				// does not know that token's dialect, which is routine on
+				// an open network and must not mute the real alarm.
+				if emitsTransfers {
 					res.SuppressedTransfers++
-					continue
+				} else {
+					res.ForeignUndecodable++
 				}
+				continue
+			}
+			if emitsTransfers {
 				res.Transfers = append(res.Transfers, record)
+			}
+			if wantMovements {
+				res.Movements = append(res.Movements, movementsOf(record, watch)...)
 			}
 		}
 	}

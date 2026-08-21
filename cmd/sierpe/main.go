@@ -121,6 +121,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	publicAPI.RegisterState(mux, st)
 	publicAPI.RegisterTransfers(mux, st)
 	publicAPI.RegisterTrustlines(mux, st)
+	publicAPI.RegisterMovements(mux, st)
 	ui.Register(mux)
 
 	// With HTTP_BASIC_AUTH configured, the whole surface (UI included)

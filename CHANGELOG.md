@@ -6,6 +6,36 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Movements (`movements` kind)**: token transfers a registered contract
+  takes part in, as sender or recipient, whoever emitted them. This is the
+  resource that answers "what came into and went out of my contract":
+  paying a contract emits the transfer from the ASSET's own SAC, so those
+  movements now land without the operator registering that asset at all.
+  Served at `GET /v1/contracts/:id/movements` with `role`, `token`, `type`
+  and ledger-bound filters, an endpoint-bound cursor, and the usual
+  scanStatus and coverage. Because ingestion already downloads whole
+  ledgers, the descending backfill derives a contract's movement history
+  from BEFORE it was registered — the thing dynamic-source indexers
+  cannot do.
+
+  Notes on purpose: the kind is bidirectional and is deliberately not
+  called "deposits", because a one-directional total reads exactly like a
+  balance and is indistinguishable from one until the first outflow that
+  never shows up. The response says so in a `note` field. The asset's
+  identity is the emitting contract id, never the SEP-0011 asset string.
+  Movement-named events from unwatched tokens that fail to decode are
+  counted in their own non-alerting metric so the existing suppression
+  alarms stay meaningful.
+
+  Reviewed adversarially before merging, which cost the feature its worst
+  bug: a movement row is keyed by (transfer_id, role) because one self
+  transfer produces two attributions, but the page cursor only carried the
+  id — so a page boundary landing between those two rows dropped one of
+  them permanently, with no gap and no counter to show for it. The cursor
+  now carries the whole row key.
+
 ### Fixed
 
 - Coverage is now declared per **(contract, kind)** instead of per
@@ -22,6 +52,22 @@ All notable changes to Sierpe are documented here. The format follows
 - `docs/openapi.yaml` declared `/v1/contracts` twice (one mapping key for
   POST, another for GET); a strict YAML parser kept only the second, so
   the registration endpoint vanished from generated clients.
+- Page cursors trusted the limit they carried. A cursor is opaque, not
+  authenticated: anyone can mint one, and a negative limit arrived at the
+  store as a slice bound and panicked the request goroutine, while an
+  oversized one quietly bypassed the endpoint maximum. All five decoders
+  (events, state, transfers, trustlines, movements) now refuse a limit no
+  handler would ever mint.
+- Registering a contract anchored its backfill exactly at the live cursor,
+  but live ingestion only starts deriving that contract once the ingesting
+  process reloads its registry. Every ledger closing inside that window
+  was derived by nobody while coverage counted it as covered. The anchor
+  now sits past the cursor by a margin wider than the reload interval;
+  overlapping costs nothing because every insert path is idempotent.
+- Dropping a kind from an existing registration left `covered_kinds`
+  vouching for it, so removing and re-adding a kind claimed history that
+  was never walked with it. Narrowing is now recorded — without reopening
+  a finished walk, since a smaller claim needs no new work.
 
 ### Changed
 

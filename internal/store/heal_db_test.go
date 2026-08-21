@@ -32,7 +32,7 @@ func TestCommitHealChunkAdvancesAndResolves(t *testing.T) {
 
 	// First chunk lands records and moves the watermark.
 	ev := testEvent("0000000000000003500-0000000000", "CAAA", "feed", 0)
-	if err := s.CommitHealChunk(ctx, "testnet", gap, 3499, false, []Event{ev}, nil, nil, nil); err != nil {
+	if err := s.CommitHealChunk(ctx, "testnet", gap, 3499, false, []Event{ev}, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitHealChunk() error = %v", err)
 	}
 	gaps, err := s.ListOpenGaps(ctx, "testnet")
@@ -45,7 +45,7 @@ func TestCommitHealChunkAdvancesAndResolves(t *testing.T) {
 	}
 
 	// Final chunk resolves the gap.
-	if err := s.CommitHealChunk(ctx, "testnet", gaps[0], 999, true, nil, nil, nil, nil); err != nil {
+	if err := s.CommitHealChunk(ctx, "testnet", gaps[0], 999, true, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitHealChunk(final) error = %v", err)
 	}
 	if gaps, err = s.ListOpenGaps(ctx, "testnet"); err != nil || len(gaps) != 0 {
@@ -79,7 +79,7 @@ func TestCommitHealChunkUnclampsBackfills(t *testing.T) {
 	gap := seedGap(t, s, 1000, 5499)
 
 	// A partial heal lowers the declared frontier but keeps the clamp.
-	if err := s.CommitHealChunk(ctx, "testnet", gap, 3499, false, nil, nil, nil, nil); err != nil {
+	if err := s.CommitHealChunk(ctx, "testnet", gap, 3499, false, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitHealChunk() error = %v", err)
 	}
 	var nextTo int64
@@ -95,7 +95,7 @@ func TestCommitHealChunkUnclampsBackfills(t *testing.T) {
 	// The final heal clears the clamp and settles the frontier at the
 	// contract's own target.
 	gaps, _ := s.ListOpenGaps(ctx, "testnet")
-	if err := s.CommitHealChunk(ctx, "testnet", gaps[0], 999, true, nil, nil, nil, nil); err != nil {
+	if err := s.CommitHealChunk(ctx, "testnet", gaps[0], 999, true, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitHealChunk(final) error = %v", err)
 	}
 	if err := s.pool.QueryRow(ctx,
@@ -117,12 +117,12 @@ func TestCommitHealChunkIsIdempotentOnRecords(t *testing.T) {
 
 	ev := testEvent("0000000000000000150-0000000000", "CAAA", "feed", 0)
 	ev.ClosedAt = time.Unix(1_700_000_000, 0).UTC()
-	if err := s.CommitHealChunk(ctx, "testnet", gap, 99, true, []Event{ev}, nil, nil, nil); err != nil {
+	if err := s.CommitHealChunk(ctx, "testnet", gap, 99, true, []Event{ev}, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitHealChunk() error = %v", err)
 	}
 	// A replayed commit against a resolved gap must fail loudly instead of
 	// silently rewriting watermarks.
-	err := s.CommitHealChunk(ctx, "testnet", gap, 99, true, []Event{ev}, nil, nil, nil)
+	err := s.CommitHealChunk(ctx, "testnet", gap, 99, true, []Event{ev}, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("committing into a resolved gap must fail")
 	}

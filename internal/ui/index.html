@@ -148,6 +148,7 @@ form.inline label { font-size: 13px; color: var(--muted); }
             <label class="kindcheck"><input type="checkbox" class="kind" value="state"> state</label>
             <label class="kindcheck"><input type="checkbox" class="kind" value="transfers"> transfers</label>
             <label class="kindcheck"><input type="checkbox" class="kind" value="trustlines"> trustlines</label>
+            <label class="kindcheck"><input type="checkbox" class="kind" value="movements"> movements</label>
           </div>
           <p class="note">No kinds checked = the classified default.</p>
           <button id="regbtn">Register</button>
@@ -327,6 +328,21 @@ const TABS = {
       mono(esc(t.amount)), esc(t.asset || ""),
     ]),
   },
+  movements: {
+    label: "Movements",
+    path: (id) => "/v1/contracts/" + id + "/movements",
+    filters: [["role", "role", ["", "recipient", "sender"]],
+      ["token", "token contract (C…)"],
+      ["type", "type", ["", "transfer", "mint", "burn", "clawback"]],
+      ["startLedger", "startLedger"], ["endLedger", "endLedger"]],
+    head: ["ledger", "closed at", "direction", "counterparty", "amount", "token"],
+    rows: (d) => d.movements.map((m) => [
+      m.ledger, when(m.ledgerClosedAt),
+      (m.role === "recipient" ? "<b>IN</b>" : "<b>OUT</b>") + " " + esc(m.transferType),
+      mono(short(m.counterparty || "", 6), m.counterparty),
+      mono(esc(m.amount)), mono(short(m.tokenContractId, 6), m.tokenContractId),
+    ]),
+  },
   state: {
     label: "State",
     path: (id) => "/v1/contracts/" + id + "/state",
@@ -452,6 +468,9 @@ async function loadTab(more) {
         (cov.backfillPending ? " (backfill running)" : "");
     }
     $("scanline").textContent = line;
+    // Some resources carry a caveat about what they are not (movements are
+    // not a balance); show it rather than letting a running total read as one.
+    if (d.note) $("scanline").textContent += " — " + d.note;
   } catch (e) { errBox($("taberr"), e); }
 }
 

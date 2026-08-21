@@ -69,7 +69,7 @@ func (f *fakeHealStore) ListOpenGaps(context.Context, string) ([]store.Gap, erro
 }
 
 func (f *fakeHealStore) CommitHealChunk(_ context.Context, _ string, gap store.Gap, newNextTo uint32, resolved bool,
-	_ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange) error {
+	_ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange, _ []store.Movement) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.commits = append(f.commits, fmt.Sprintf("%s:%d:%v", gap.ID, newNextTo, resolved))

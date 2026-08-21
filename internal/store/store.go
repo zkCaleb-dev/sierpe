@@ -149,7 +149,7 @@ type LedgerRecord struct {
 // persists the ledger's extracted events and state changes. This is THE
 // transaction (CLAUDE.md rule 1): either the ledger fully happened —
 // cursor, continuity, data — or it never did.
-func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerRecord, events []Event, states []StateChange, transfers []Transfer, trustlines []TrustlineChange) error {
+func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerRecord, events []Event, states []StateChange, transfers []Transfer, trustlines []TrustlineChange, movements []Movement) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := insertEvents(ctx, tx, network, events); err != nil {
 			return err
@@ -167,6 +167,9 @@ func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerReco
 			return err
 		}
 		if err := applyTrustlineEntries(ctx, tx, network, trustlines); err != nil {
+			return err
+		}
+		if err := insertMovements(ctx, tx, network, movements); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `

@@ -83,7 +83,7 @@ func (f *fakeBackfillStore) ListPendingBackfills(context.Context, string) ([]sto
 	return out, nil
 }
 
-func (f *fakeBackfillStore) CommitBackfillChunk(_ context.Context, _ string, b store.Backfill, _ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange) error {
+func (f *fakeBackfillStore) CommitBackfillChunk(_ context.Context, _ string, b store.Backfill, _ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange, _ []store.Movement) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j := f.jobs[b.ContractID]

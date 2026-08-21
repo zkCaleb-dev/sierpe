@@ -36,7 +36,7 @@ type chunkSource interface {
 // backfillStore is the store slice the backfiller consumes.
 type backfillStore interface {
 	ListPendingBackfills(ctx context.Context, network string) ([]store.BackfillJob, error)
-	CommitBackfillChunk(ctx context.Context, network string, b store.Backfill, events []store.Event, states []store.StateChange, transfers []store.Transfer, trustlines []store.TrustlineChange) error
+	CommitBackfillChunk(ctx context.Context, network string, b store.Backfill, events []store.Event, states []store.StateChange, transfers []store.Transfer, trustlines []store.TrustlineChange, movements []store.Movement) error
 	RecordGap(ctx context.Context, network string, from, to uint32, reason string) error
 }
 
@@ -48,11 +48,13 @@ type backfillInstruments interface {
 	IncStateChangesExtracted(n int)
 	IncTransfersExtracted(n int)
 	IncTrustlineChangesExtracted(n int)
+	IncMovementsExtracted(n int)
 	IncFailedTxs(n int)
 	IncSuppressedTxs(n int)
 	IncSuppressedEvents(n int)
 	IncSuppressedTransfers(n int)
 	IncSuppressedTrustlines(n int)
+	IncForeignUndecodable(n int)
 }
 
 // Backfiller walks every registered contract's history downward in chunks,
@@ -126,7 +128,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 	if bf.NextTo < bf.TargetFrom {
 		next := bf
 		next.Done = true
-		return b.store.CommitBackfillChunk(ctx, b.network, next, nil, nil, nil, nil)
+		return b.store.CommitBackfillChunk(ctx, b.network, next, nil, nil, nil, nil, nil)
 	}
 	chunkFrom := bf.TargetFrom
 	if span := bf.NextTo - bf.TargetFrom; span >= backfillChunkSize {
@@ -170,7 +172,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 	}
 
 	if err := b.store.CommitBackfillChunk(ctx, b.network, next,
-		res.Events, res.StateChanges, res.Transfers, res.TrustlineChanges); err != nil {
+		res.Events, res.StateChanges, res.Transfers, res.TrustlineChanges, res.Movements); err != nil {
 		return err
 	}
 
@@ -180,11 +182,13 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 	b.inst.IncStateChangesExtracted(len(res.StateChanges))
 	b.inst.IncTransfersExtracted(len(res.Transfers))
 	b.inst.IncTrustlineChangesExtracted(len(res.TrustlineChanges))
+	b.inst.IncMovementsExtracted(len(res.Movements))
 	b.inst.IncFailedTxs(res.FailedTxs)
 	b.inst.IncSuppressedTxs(res.SuppressedTxs)
 	b.inst.IncSuppressedEvents(res.SuppressedEvents)
 	b.inst.IncSuppressedTransfers(res.SuppressedTransfers)
 	b.inst.IncSuppressedTrustlines(res.SuppressedTrustlines)
+	b.inst.IncForeignUndecodable(res.ForeignUndecodable)
 	if res.SuppressedTxs > 0 || res.SuppressedEvents > 0 || res.SuppressedTransfers > 0 || res.SuppressedTrustlines > 0 {
 		b.log.Warn("backfill: suppressed unreadable chain data",
 			"contract_id", job.Contract.ContractID,
@@ -196,6 +200,7 @@ func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) er
 		"from", next.NextTo+1, "to", bf.NextTo,
 		"events", len(res.Events), "state_changes", len(res.StateChanges),
 		"transfers", len(res.Transfers), "trustlines", len(res.TrustlineChanges),
+		"movements", len(res.Movements),
 		"done", next.Done)
 	return nil
 }
@@ -234,11 +239,13 @@ func (b *Backfiller) scan(ctx context.Context, snap *registry.Snapshot, from, to
 			acc.StateChanges = append(acc.StateChanges, res.StateChanges...)
 			acc.Transfers = append(acc.Transfers, res.Transfers...)
 			acc.TrustlineChanges = append(acc.TrustlineChanges, res.TrustlineChanges...)
+			acc.Movements = append(acc.Movements, res.Movements...)
 			acc.FailedTxs += res.FailedTxs
 			acc.SuppressedTxs += res.SuppressedTxs
 			acc.SuppressedEvents += res.SuppressedEvents
 			acc.SuppressedTransfers += res.SuppressedTransfers
 			acc.SuppressedTrustlines += res.SuppressedTrustlines
+			acc.ForeignUndecodable += res.ForeignUndecodable
 			seq++
 		}
 	}

@@ -287,6 +287,7 @@ func (s *Server) coverageByKind(ctx context.Context, contract store.Contract, cu
 	out := make([]coverageInfo, 0, len(contract.Kinds))
 	for _, kind := range []string{
 		store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines,
+		store.KindMovements,
 	} {
 		if contract.HasKind(kind) {
 			out = append(out, s.coverage(ctx, contract, kind, q, cursorSeq))
@@ -302,6 +303,14 @@ func scanStatus(hasMore bool, q store.EventQuery, cov coverageInfo, cursorSeq ui
 	switch {
 	case hasMore:
 		return scanHasMore
+	case !cov.KindDerived:
+		// Nothing was ever derived for this kind, so the page is empty
+		// because it was never filled — the one thing COMPLETE must never
+		// be allowed to mean (rule 7). OLDEST_REACHED is the vocabulary's
+		// "there is history here this instance cannot serve", which is
+		// exactly the situation, and it keeps the getEvents v2 status set
+		// intact (decision D7).
+		return scanOldestReached
 	case q.ToLedger == 0 || q.ToLedger > cursorSeq:
 		return scanWaitingForLedgers
 	case q.FromLedger < cov.IndexedFromLedger:

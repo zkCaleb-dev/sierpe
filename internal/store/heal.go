@@ -61,7 +61,7 @@ func (s *Store) ListOpenGaps(ctx context.Context, network string) ([]Gap, error)
 //
 // resolved must be true exactly when newNextTo < gap.From.
 func (s *Store) CommitHealChunk(ctx context.Context, network string, gap Gap, newNextTo uint32, resolved bool,
-	events []Event, states []StateChange, transfers []Transfer, trustlines []TrustlineChange) error {
+	events []Event, states []StateChange, transfers []Transfer, trustlines []TrustlineChange, movements []Movement) error {
 
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := insertEvents(ctx, tx, network, events); err != nil {
@@ -80,6 +80,9 @@ func (s *Store) CommitHealChunk(ctx context.Context, network string, gap Gap, ne
 			return err
 		}
 		if err := applyTrustlineEntries(ctx, tx, network, trustlines); err != nil {
+			return err
+		}
+		if err := insertMovements(ctx, tx, network, movements); err != nil {
 			return err
 		}
 
