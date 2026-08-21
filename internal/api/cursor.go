@@ -50,7 +50,71 @@ const (
 	kindTransfers        = "transfers"
 	kindTrustlines       = "trustlines"
 	kindTrustlineHistory = "trustlines_history"
+	kindMovements        = "movements"
 )
+
+// movementsCursorPayload is the opaque cursor for the movements endpoint.
+type movementsCursorPayload struct {
+	V          int    `json:"v"`
+	Kind       string `json:"k"`
+	Network    string `json:"n"`
+	ContractID string `json:"c"`
+	Role       string `json:"r,omitempty"`
+	Token      string `json:"tk,omitempty"`
+	Type       string `json:"tt,omitempty"`
+	FromLedger uint32 `json:"f,omitempty"`
+	ToLedger   uint32 `json:"e,omitempty"`
+	Limit      int    `json:"l"`
+	AfterID    string `json:"a,omitempty"`
+}
+
+func encodeMovementsCursor(network string, q store.MovementQuery) string {
+	payload := movementsCursorPayload{
+		V:          cursorVersion,
+		Kind:       kindMovements,
+		Network:    network,
+		ContractID: q.ContractID,
+		Role:       q.Role,
+		Token:      q.Token,
+		Type:       q.Type,
+		FromLedger: q.FromLedger,
+		ToLedger:   q.ToLedger,
+		Limit:      q.Limit,
+		AfterID:    q.AfterID,
+	}
+	raw, _ := json.Marshal(payload) // fixed shape; cannot fail
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeMovementsCursor(network, contractID, cursor string) (store.MovementQuery, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return store.MovementQuery{}, fmt.Errorf("cursor is not valid: %w", err)
+	}
+	var p movementsCursorPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return store.MovementQuery{}, fmt.Errorf("cursor is not valid: %w", err)
+	}
+	if p.V != cursorVersion {
+		return store.MovementQuery{}, fmt.Errorf("cursor version %d is not supported", p.V)
+	}
+	if p.Kind != kindMovements {
+		return store.MovementQuery{}, fmt.Errorf("cursor belongs to a different endpoint")
+	}
+	if p.Network != network || p.ContractID != contractID {
+		return store.MovementQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
+	}
+	return store.MovementQuery{
+		ContractID: p.ContractID,
+		Role:       p.Role,
+		Token:      p.Token,
+		Type:       p.Type,
+		FromLedger: p.FromLedger,
+		ToLedger:   p.ToLedger,
+		Limit:      p.Limit,
+		AfterID:    p.AfterID,
+	}, nil
+}
 
 // trustlinesCursorPayload is the opaque cursor for both trustline endpoints.
 type trustlinesCursorPayload struct {

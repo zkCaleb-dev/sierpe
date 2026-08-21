@@ -38,7 +38,7 @@ func TestCommitLedgerWithTransfersIsIdempotent(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, transfers, nil); err != nil {
+		if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, transfers, nil, nil); err != nil {
 			t.Fatalf("CommitLedger() attempt %d error = %v", i+1, err)
 		}
 	}
@@ -74,7 +74,7 @@ func TestQueryTransfers(t *testing.T) {
 		mk("0000000000000000400-0000000000", 400, TransferTypeTransfer, "GBOB", "GCAROL"),
 	}
 	rec := LedgerRecord{Sequence: 400, Hash: "x", PreviousHash: "y", ClosedAt: time.Now().UTC()}
-	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, seed, nil); err != nil {
+	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, seed, nil, nil); err != nil {
 		t.Fatalf("CommitLedger() error = %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestTransfersNumericAmountIsExact(t *testing.T) {
 	tr.TransferType = TransferTypeBurn
 
 	rec := LedgerRecord{Sequence: 100, Hash: "aa", PreviousHash: "99", ClosedAt: time.Now().UTC()}
-	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, []Transfer{tr}, nil); err != nil {
+	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, []Transfer{tr}, nil, nil); err != nil {
 		t.Fatalf("CommitLedger() error = %v", err)
 	}
 

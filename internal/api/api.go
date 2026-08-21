@@ -287,6 +287,7 @@ func (s *Server) coverageByKind(ctx context.Context, contract store.Contract, cu
 	out := make([]coverageInfo, 0, len(contract.Kinds))
 	for _, kind := range []string{
 		store.KindEvents, store.KindState, store.KindTransfers, store.KindTrustlines,
+		store.KindMovements,
 	} {
 		if contract.HasKind(kind) {
 			out = append(out, s.coverage(ctx, contract, kind, q, cursorSeq))

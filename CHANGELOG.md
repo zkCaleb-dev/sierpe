@@ -6,6 +6,29 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Movements (`movements` kind)**: token transfers a registered contract
+  takes part in, as sender or recipient, whoever emitted them. This is the
+  resource that answers "what came into and went out of my contract":
+  paying a contract emits the transfer from the ASSET's own SAC, so those
+  movements now land without the operator registering that asset at all.
+  Served at `GET /v1/contracts/:id/movements` with `role`, `token`, `type`
+  and ledger-bound filters, an endpoint-bound cursor, and the usual
+  scanStatus and coverage. Because ingestion already downloads whole
+  ledgers, the descending backfill derives a contract's movement history
+  from BEFORE it was registered — the thing dynamic-source indexers
+  cannot do.
+
+  Notes on purpose: the kind is bidirectional and is deliberately not
+  called "deposits", because a one-directional total reads exactly like a
+  balance and is indistinguishable from one until the first outflow that
+  never shows up. The response says so in a `note` field. The asset's
+  identity is the emitting contract id, never the SEP-0011 asset string.
+  Movement-named events from unwatched tokens that fail to decode are
+  counted in their own non-alerting metric so the existing suppression
+  alarms stay meaningful.
+
 ### Fixed
 
 - Coverage is now declared per **(contract, kind)** instead of per

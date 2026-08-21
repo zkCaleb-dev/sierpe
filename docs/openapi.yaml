@@ -49,7 +49,7 @@ paths:
                   type: array
                   items:
                     type: string
-                    enum: [events, state, transfers, trustlines]
+                    enum: [events, state, transfers, trustlines, movements]
                   description: >
                     Data kinds to derive. Defaults to the classified set:
                     [events, state] for wasm contracts, plus transfers for
@@ -355,6 +355,59 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/contracts/{id}/movements:
+    get:
+      tags: [public]
+      summary: Token movements this contract took part in
+      description: |
+        Token transfers naming this contract as sender or recipient,
+        whichever contract emitted them. This is the resource that answers
+        "what came into and went out of my contract": a payment to a
+        contract is emitted by the ASSET's SAC, so it appears here without
+        the operator having to register that asset. Requires the
+        `movements` kind on the registration.
+
+        Not a balance. Value can also arrive without any SEP-41 transfer
+        event (custom tokens, contracts crediting internal balances), and
+        amounts are raw base units of different tokens — never sum across
+        `tokenContractId`.
+      parameters:
+        - { $ref: "#/components/parameters/contractID" }
+        - name: role
+          in: query
+          schema: { type: string, enum: [recipient, sender] }
+          description: Omit for both directions.
+        - name: token
+          in: query
+          schema: { type: string }
+          description: >
+            Emitting token contract (C... strkey). The asset's identity is
+            its contract, never its SEP-0011 string, which is
+            attacker-choosable for custom tokens.
+        - name: type
+          in: query
+          schema: { type: string, enum: [transfer, mint, burn, clawback] }
+        - name: startLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: endLedger
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of movements with scan status and coverage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MovementsPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       tags: [operational]
@@ -468,7 +521,7 @@ components:
         source: { type: string, enum: [api, config] }
         kinds:
           type: array
-          items: { type: string, enum: [events, state, transfers, trustlines] }
+          items: { type: string, enum: [events, state, transfers, trustlines, movements] }
         classification: { type: object }
         registered_at: { type: string, format: date-time }
 
@@ -506,7 +559,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [events, state, transfers, trustlines]
+          enum: [events, state, transfers, trustlines, movements]
           description: The data kind this declaration is about.
         kindDerived:
           type: boolean
@@ -716,6 +769,42 @@ components:
           enum: [HAS_MORE, WAITING_FOR_LEDGERS, OLDEST_REACHED, COMPLETE]
         coverage: { $ref: "#/components/schemas/Coverage" }
         latestLedger: { type: integer }
+
+    Movement:
+      type: object
+      properties:
+        id:
+          type: string
+          description: >
+            The source transfer's id, which is also its event id. A
+            self-transfer produces two rows sharing it, so key on (id, role).
+        role: { type: string, enum: [recipient, sender] }
+        tokenContractId:
+          type: string
+          description: The emitting token contract — the asset's identity.
+        transferType: { type: string, enum: [transfer, mint, burn, clawback] }
+        counterparty:
+          type: string
+          description: The other side; absent on mint (in) and burn (out).
+        amount: { type: string, description: Exact i128 amount in raw token units. }
+        ledger: { type: integer }
+        ledgerClosedAt: { type: string, format: date-time }
+
+    MovementsPage:
+      type: object
+      properties:
+        movements:
+          type: array
+          items: { $ref: "#/components/schemas/Movement" }
+        cursor: { type: string }
+        scanStatus:
+          type: string
+          enum: [HAS_MORE, WAITING_FOR_LEDGERS, OLDEST_REACHED, COMPLETE]
+        coverage: { $ref: "#/components/schemas/Coverage" }
+        latestLedger: { type: integer }
+        note:
+          type: string
+          description: States what this resource is not — read it before treating totals as balances.
 
     Status:
       type: object

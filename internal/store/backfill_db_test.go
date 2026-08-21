@@ -38,8 +38,7 @@ func TestEnsureBackfillLifecycle(t *testing.T) {
 	}
 
 	// Same target again: progress untouched.
-	if err := s.CommitBackfillChunk(ctx, "testnet",
-		Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 3000}, nil, nil, nil, nil); err != nil {
+	if err := s.CommitBackfillChunk(ctx, "testnet", Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 3000}, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
 	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000, []string{KindEvents}); err != nil {
@@ -52,7 +51,7 @@ func TestEnsureBackfillLifecycle(t *testing.T) {
 
 	// Walk finishes at 100; a deeper target must reopen it.
 	done := Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 99, Done: true}
-	if err := s.CommitBackfillChunk(ctx, "testnet", done, nil, nil, nil, nil); err != nil {
+	if err := s.CommitBackfillChunk(ctx, "testnet", done, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
 	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000, []string{KindEvents}); err != nil {
@@ -138,7 +137,7 @@ func TestCommitBackfillChunkPersistsEventsAtomically(t *testing.T) {
 	clamped := uint32(3001)
 	b := Backfill{ContractID: "CAAA", TargetFrom: 1, NextTo: 3000, Done: true, ClampedAt: &clamped}
 	events := []Event{testEvent("0000000000000004000-0000000000", "CAAA", "feed", 0)}
-	if err := s.CommitBackfillChunk(ctx, "testnet", b, events, nil, nil, nil); err != nil {
+	if err := s.CommitBackfillChunk(ctx, "testnet", b, events, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
 
@@ -164,7 +163,7 @@ func TestCommitBackfillChunkRefusesVanishedRegistration(t *testing.T) {
 
 	b := Backfill{ContractID: "CGONE", TargetFrom: 1, NextTo: 3000}
 	events := []Event{testEvent("0000000000000004100-0000000000", "CGONE", "dead", 0)}
-	if err := s.CommitBackfillChunk(ctx, "testnet", b, events, nil, nil, nil); err == nil {
+	if err := s.CommitBackfillChunk(ctx, "testnet", b, events, nil, nil, nil, nil); err == nil {
 		t.Fatal("committing a chunk for an unregistered contract must fail")
 	}
 	var n int64
@@ -232,9 +231,7 @@ func TestEnsureBackfillReopensWhenAKindIsAdded(t *testing.T) {
 	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
-	if err := s.CommitBackfillChunk(ctx, "testnet",
-		Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 99, Done: true},
-		nil, nil, nil, nil); err != nil {
+	if err := s.CommitBackfillChunk(ctx, "testnet", Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 99, Done: true}, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
 	done, err := s.GetBackfill(ctx, "testnet", "CAAA")

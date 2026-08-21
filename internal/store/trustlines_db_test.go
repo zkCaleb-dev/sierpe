@@ -39,7 +39,7 @@ func TestCommitLedgerWithTrustlinesIsIdempotent(t *testing.T) {
 		testTrustlineChange("0000000000000000100-0000000000", 100, "created", "GALICE", i64(500)),
 	}
 	for i := 0; i < 2; i++ {
-		if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, changes); err != nil {
+		if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, changes, nil); err != nil {
 			t.Fatalf("CommitLedger() attempt %d error = %v", i+1, err)
 		}
 	}
@@ -66,7 +66,7 @@ func TestTrustlineEntriesGuardAndTombstones(t *testing.T) {
 	commit := func(seq uint32, hash string, changes ...TrustlineChange) {
 		t.Helper()
 		rec := LedgerRecord{Sequence: seq, Hash: hash, PreviousHash: "p" + hash, ClosedAt: time.Now().UTC()}
-		if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, changes); err != nil {
+		if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, changes, nil); err != nil {
 			t.Fatalf("CommitLedger(%d) error = %v", seq, err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestQueryTrustlines(t *testing.T) {
 		testTrustlineChange("0000000000000000200-0000000000", 200, "created", "GBOB", i64(300)),
 		testTrustlineChange("0000000000000000300-0000000000", 300, "updated", "GALICE", i64(600)),
 	}
-	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, changes); err != nil {
+	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, changes, nil); err != nil {
 		t.Fatalf("CommitLedger() error = %v", err)
 	}
 

@@ -47,7 +47,7 @@ type healReplayer interface {
 type healStore interface {
 	ListOpenGaps(ctx context.Context, network string) ([]store.Gap, error)
 	CommitHealChunk(ctx context.Context, network string, gap store.Gap, newNextTo uint32, resolved bool,
-		events []store.Event, states []store.StateChange, transfers []store.Transfer, trustlines []store.TrustlineChange) error
+		events []store.Event, states []store.StateChange, transfers []store.Transfer, trustlines []store.TrustlineChange, movements []store.Movement) error
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
 }
 
@@ -61,11 +61,13 @@ type healInstruments interface {
 	IncStateChangesExtracted(n int)
 	IncTransfersExtracted(n int)
 	IncTrustlineChangesExtracted(n int)
+	IncMovementsExtracted(n int)
 	IncFailedTxs(n int)
 	IncSuppressedTxs(n int)
 	IncSuppressedEvents(n int)
 	IncSuppressedTransfers(n int)
 	IncSuppressedTrustlines(n int)
+	IncForeignUndecodable(n int)
 }
 
 // watchSource provides the live registry snapshot heals extract against.
@@ -197,11 +199,13 @@ func (h *Healer) healChunk(ctx context.Context, gap store.Gap) error {
 		acc.StateChanges = append(acc.StateChanges, res.StateChanges...)
 		acc.Transfers = append(acc.Transfers, res.Transfers...)
 		acc.TrustlineChanges = append(acc.TrustlineChanges, res.TrustlineChanges...)
+		acc.Movements = append(acc.Movements, res.Movements...)
 		acc.FailedTxs += res.FailedTxs
 		acc.SuppressedTxs += res.SuppressedTxs
 		acc.SuppressedEvents += res.SuppressedEvents
 		acc.SuppressedTransfers += res.SuppressedTransfers
 		acc.SuppressedTrustlines += res.SuppressedTrustlines
+		acc.ForeignUndecodable += res.ForeignUndecodable
 		return nil
 	})
 	if err != nil {
@@ -211,7 +215,7 @@ func (h *Healer) healChunk(ctx context.Context, gap store.Gap) error {
 	newNextTo := chunkFrom - 1
 	resolved := chunkFrom <= gap.From
 	if err := h.store.CommitHealChunk(ctx, h.network, gap, newNextTo, resolved,
-		acc.Events, acc.StateChanges, acc.Transfers, acc.TrustlineChanges); err != nil {
+		acc.Events, acc.StateChanges, acc.Transfers, acc.TrustlineChanges, acc.Movements); err != nil {
 		return err
 	}
 
@@ -223,15 +227,18 @@ func (h *Healer) healChunk(ctx context.Context, gap store.Gap) error {
 	h.inst.IncStateChangesExtracted(len(acc.StateChanges))
 	h.inst.IncTransfersExtracted(len(acc.Transfers))
 	h.inst.IncTrustlineChangesExtracted(len(acc.TrustlineChanges))
+	h.inst.IncMovementsExtracted(len(acc.Movements))
 	h.inst.IncFailedTxs(acc.FailedTxs)
 	h.inst.IncSuppressedTxs(acc.SuppressedTxs)
 	h.inst.IncSuppressedEvents(acc.SuppressedEvents)
 	h.inst.IncSuppressedTransfers(acc.SuppressedTransfers)
 	h.inst.IncSuppressedTrustlines(acc.SuppressedTrustlines)
+	h.inst.IncForeignUndecodable(acc.ForeignUndecodable)
 	h.log.Info("heal: chunk committed",
 		"gap", gap.ID, "from", chunkFrom, "to", to,
 		"events", len(acc.Events), "state_changes", len(acc.StateChanges),
 		"transfers", len(acc.Transfers), "trustlines", len(acc.TrustlineChanges),
+		"movements", len(acc.Movements),
 		"resolved", resolved)
 	return nil
 }

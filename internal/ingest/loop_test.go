@@ -84,7 +84,7 @@ func (s *fakeStore) LoadCursor(context.Context, string) (store.Cursor, error) {
 	return *s.cursor, nil
 }
 
-func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange) error {
+func (s *fakeStore) CommitLedger(_ context.Context, _ string, rec store.LedgerRecord, _ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange, _ []store.Movement) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.committed = append(s.committed, rec)
@@ -117,6 +117,8 @@ func (nopInstruments) IncSuppressedEvents(int)          {}
 func (nopInstruments) IncTransfersExtracted(int)        {}
 func (nopInstruments) IncSuppressedTransfers(int)       {}
 func (nopInstruments) IncTrustlineChangesExtracted(int) {}
+func (nopInstruments) IncMovementsExtracted(int)        {}
+func (nopInstruments) IncForeignUndecodable(int)        {}
 func (nopInstruments) IncSuppressedTrustlines(int)      {}
 
 // emptyLister backs a registry that watches nothing; extraction over the

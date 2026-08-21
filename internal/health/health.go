@@ -29,6 +29,8 @@ type Metrics struct {
 	StateChanges         prometheus.Counter
 	Transfers            prometheus.Counter
 	TrustlineChanges     prometheus.Counter
+	Movements            prometheus.Counter
+	ForeignUndecodable   prometheus.Counter
 	FailedTxs            prometheus.Counter
 	SuppressedTxs        prometheus.Counter
 	SuppressedEvents     prometheus.Counter
@@ -85,6 +87,14 @@ func NewMetrics() *Metrics {
 		TrustlineChanges: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_trustline_changes_extracted_total",
 			Help: "Classic trustline changes of watched SAC assets committed to the store.",
+		}),
+		Movements: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_movements_extracted_total",
+			Help: "Token movements attributed to watched contracts that took part in them.",
+		}),
+		ForeignUndecodable: factory.NewCounter(prometheus.CounterOpts{
+			Name: "sierpe_foreign_transfer_undecodable_total",
+			Help: "Movement-named events from unwatched token contracts that did not decode. Expected nonzero on an open network; do NOT alert.",
 		}),
 		FailedTxs: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_failed_txs_skipped_total",
@@ -187,6 +197,17 @@ func (m *Metrics) AddHealedLedgers(n int) { m.HealedLedgers.Add(float64(n)) }
 // IncEquivalenceFailures counts refused archive legs: the captive replay
 // did not reproduce the RPC byte-for-byte.
 func (m *Metrics) IncEquivalenceFailures() { m.EquivalenceFailures.Inc() }
+
+// IncMovementsExtracted counts token movements attributed to watched
+// contracts.
+func (m *Metrics) IncMovementsExtracted(n int) { m.Movements.Add(float64(n)) }
+
+// IncForeignUndecodable counts movement-named events from unwatched token
+// contracts that did not decode. Routine on an open network: anyone may
+// emit an event called transfer carrying anything, so this one never
+// alerts — which is precisely what keeps the suppression counters
+// meaningful.
+func (m *Metrics) IncForeignUndecodable(n int) { m.ForeignUndecodable.Add(float64(n)) }
 
 // IncBackfillChunks counts one committed backfill chunk.
 func (m *Metrics) IncBackfillChunks() { m.BackfillChunks.Inc() }
