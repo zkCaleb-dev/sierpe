@@ -33,6 +33,22 @@ func (b Backfill) CoversKind(kind string) bool {
 	return false
 }
 
+// intersect keeps only the covered kinds the registration still derives,
+// preserving the covered order so the stored array stays stable.
+func intersect(covered, kinds []string) []string {
+	want := make(map[string]struct{}, len(kinds))
+	for _, k := range kinds {
+		want[k] = struct{}{}
+	}
+	out := make([]string, 0, len(covered))
+	for _, k := range covered {
+		if _, ok := want[k]; ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // coversAll reports whether every wanted kind is already covered.
 func (b Backfill) coversAll(kinds []string) bool {
 	for _, k := range kinds {
@@ -92,7 +108,13 @@ func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, 
 
 		extends := targetFrom < current.TargetFrom
 		newKinds := !current.coversAll(kinds)
-		if !extends && !newKinds {
+		// Coverage may never name a kind the registration no longer
+		// derives: dropping a kind and adding it back would otherwise
+		// leave the row vouching for history that was never walked with
+		// it. Narrowing needs no new work, only an honest record.
+		covered := intersect(current.CoveredKinds, kinds)
+		narrowed := len(covered) != len(current.CoveredKinds)
+		if !extends && !newKinds && !narrowed {
 			return nil // nothing new requested; keep progress
 		}
 
@@ -105,6 +127,18 @@ func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, 
 		next := current.NextTo
 		if newKinds {
 			next = nextTo
+		}
+		// A pure narrowing must not disturb a finished walk: there is
+		// nothing new to derive, only a smaller truth to record.
+		if !extends && !newKinds {
+			if _, err := tx.Exec(ctx, `
+				UPDATE backfill SET covered_kinds = $3, updated_at = now()
+				WHERE network = $1 AND contract_id = $2`,
+				network, contractID, covered,
+			); err != nil {
+				return fmt.Errorf("store: narrow covered kinds: %w", err)
+			}
+			return nil
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE backfill

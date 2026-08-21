@@ -57,11 +57,15 @@ type Result struct {
 	// SuppressedTrustlines counts watched trustline changes that could not
 	// be read. Same alarm semantics as SuppressedEvents.
 	SuppressedTrustlines int
-	// ForeignUndecodable counts movement-named events from UNWATCHED token
-	// contracts that did not decode as transfers. Expected to be nonzero on
-	// an open network — anyone can emit an event called "transfer" carrying
-	// anything — so it is reported but never alerted on, which is what keeps
-	// the suppression counters above meaningful.
+	// ForeignUndecodable counts movement-named events that did not decode,
+	// emitted by token contracts whose transfers this instance does not
+	// index. Expected to be nonzero on an open network — anyone can emit an
+	// event called "transfer" carrying anything, aimed at any address — so
+	// it is reported but never alerted on, which is what keeps the
+	// suppression counters above meaningful. The flip side is real: a
+	// genuinely non-standard token moving value into a watched contract
+	// lands in this same bucket, and the endpoint documents that movements
+	// are not a balance for exactly that reason.
 	ForeignUndecodable int
 }
 

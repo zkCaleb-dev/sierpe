@@ -29,6 +29,13 @@ All notable changes to Sierpe are documented here. The format follows
   counted in their own non-alerting metric so the existing suppression
   alarms stay meaningful.
 
+  Reviewed adversarially before merging, which cost the feature its worst
+  bug: a movement row is keyed by (transfer_id, role) because one self
+  transfer produces two attributions, but the page cursor only carried the
+  id — so a page boundary landing between those two rows dropped one of
+  them permanently, with no gap and no counter to show for it. The cursor
+  now carries the whole row key.
+
 ### Fixed
 
 - Coverage is now declared per **(contract, kind)** instead of per
@@ -45,6 +52,22 @@ All notable changes to Sierpe are documented here. The format follows
 - `docs/openapi.yaml` declared `/v1/contracts` twice (one mapping key for
   POST, another for GET); a strict YAML parser kept only the second, so
   the registration endpoint vanished from generated clients.
+- Page cursors trusted the limit they carried. A cursor is opaque, not
+  authenticated: anyone can mint one, and a negative limit arrived at the
+  store as a slice bound and panicked the request goroutine, while an
+  oversized one quietly bypassed the endpoint maximum. All five decoders
+  (events, state, transfers, trustlines, movements) now refuse a limit no
+  handler would ever mint.
+- Registering a contract anchored its backfill exactly at the live cursor,
+  but live ingestion only starts deriving that contract once the ingesting
+  process reloads its registry. Every ledger closing inside that window
+  was derived by nobody while coverage counted it as covered. The anchor
+  now sits past the cursor by a margin wider than the reload interval;
+  overlapping costs nothing because every insert path is idempotent.
+- Dropping a kind from an existing registration left `covered_kinds`
+  vouching for it, so removing and re-adding a kind claimed history that
+  was never walked with it. Narrowing is now recorded — without reopening
+  a finished walk, since a smaller claim needs no new work.
 
 ### Changed
 

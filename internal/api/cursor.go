@@ -26,6 +26,18 @@ type cursorPayload struct {
 
 const cursorVersion = 1
 
+// validateCursorLimit rejects a limit no handler would ever mint. A cursor
+// is opaque, not trusted: it arrives from the client and anyone can craft
+// one. An unchecked negative limit reaches the store as `out[:limit]` and
+// panics the request goroutine; an unchecked large one silently bypasses
+// maxLimit. Every decoder runs this before returning a query.
+func validateCursorLimit(limit int) error {
+	if limit < 1 || limit > maxLimit {
+		return fmt.Errorf("cursor is not valid: limit %d is out of range", limit)
+	}
+	return nil
+}
+
 func encodeCursor(network string, q store.EventQuery, afterID string) string {
 	payload := cursorPayload{
 		V:          cursorVersion,
@@ -66,6 +78,7 @@ type movementsCursorPayload struct {
 	ToLedger   uint32 `json:"e,omitempty"`
 	Limit      int    `json:"l"`
 	AfterID    string `json:"a,omitempty"`
+	AfterRole  string `json:"ar,omitempty"`
 }
 
 func encodeMovementsCursor(network string, q store.MovementQuery) string {
@@ -81,6 +94,7 @@ func encodeMovementsCursor(network string, q store.MovementQuery) string {
 		ToLedger:   q.ToLedger,
 		Limit:      q.Limit,
 		AfterID:    q.AfterID,
+		AfterRole:  q.AfterRole,
 	}
 	raw, _ := json.Marshal(payload) // fixed shape; cannot fail
 	return base64.RawURLEncoding.EncodeToString(raw)
@@ -104,6 +118,9 @@ func decodeMovementsCursor(network, contractID, cursor string) (store.MovementQu
 	if p.Network != network || p.ContractID != contractID {
 		return store.MovementQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
 	}
+	if err := validateCursorLimit(p.Limit); err != nil {
+		return store.MovementQuery{}, err
+	}
 	return store.MovementQuery{
 		ContractID: p.ContractID,
 		Role:       p.Role,
@@ -113,6 +130,7 @@ func decodeMovementsCursor(network, contractID, cursor string) (store.MovementQu
 		ToLedger:   p.ToLedger,
 		Limit:      p.Limit,
 		AfterID:    p.AfterID,
+		AfterRole:  p.AfterRole,
 	}, nil
 }
 
@@ -164,6 +182,9 @@ func decodeTrustlinesCursor(network, contractID, kind, cursor string) (store.Tru
 	}
 	if p.Network != network || p.ContractID != contractID {
 		return store.TrustlineQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
+	}
+	if err := validateCursorLimit(p.Limit); err != nil {
+		return store.TrustlineQuery{}, err
 	}
 	return store.TrustlineQuery{
 		ContractID:   p.ContractID,
@@ -229,6 +250,9 @@ func decodeTransfersCursor(network, contractID, cursor string) (store.TransferQu
 	if p.Network != network || p.ContractID != contractID {
 		return store.TransferQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
 	}
+	if err := validateCursorLimit(p.Limit); err != nil {
+		return store.TransferQuery{}, err
+	}
 	return store.TransferQuery{
 		ContractID:   p.ContractID,
 		Account:      p.Account,
@@ -293,6 +317,9 @@ func decodeStateCursor(network, contractID, kind, cursor string) (store.StateQue
 	if p.Network != network || p.ContractID != contractID {
 		return store.StateQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
 	}
+	if err := validateCursorLimit(p.Limit); err != nil {
+		return store.StateQuery{}, err
+	}
 	return store.StateQuery{
 		ContractID:      p.ContractID,
 		KeyXDR:          p.KeyXDR,
@@ -319,6 +346,9 @@ func decodeCursor(network, contractID, cursor string) (store.EventQuery, error) 
 	}
 	if p.Network != network || p.ContractID != contractID {
 		return store.EventQuery{}, fmt.Errorf("cursor belongs to a different contract or network")
+	}
+	if err := validateCursorLimit(p.Limit); err != nil {
+		return store.EventQuery{}, err
 	}
 	return store.EventQuery{
 		ContractID: p.ContractID,

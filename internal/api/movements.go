@@ -141,7 +141,8 @@ func (s *Server) handleMovements(w http.ResponseWriter, r *http.Request, movemen
 		store.EventQuery{ContractID: contractID, FromLedger: q.FromLedger, ToLedger: q.ToLedger}, cursorSeq)
 
 	if len(rows) > 0 {
-		q.AfterID = rows[len(rows)-1].TransferID
+		last := rows[len(rows)-1]
+		q.AfterID, q.AfterRole = last.TransferID, last.Role
 	}
 	resp := movementsResponse{
 		Movements: make([]movementRecord, 0, len(rows)),

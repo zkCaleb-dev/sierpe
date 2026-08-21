@@ -364,11 +364,11 @@ func TestRegisterPlansBackfill(t *testing.T) {
 		want string
 	}{
 		{"default genesis", `{"contract_id":"` + validContract + `"}`,
-			validContract + ":1:500"},
+			validContract + ":1:520"},
 		{"explicit genesis", `{"contract_id":"` + validContract + `","from":"genesis"}`,
-			validContract + ":1:500"},
+			validContract + ":1:520"},
 		{"ledger number", `{"contract_id":"` + validContract + `","from":123}`,
-			validContract + ":123:500"},
+			validContract + ":123:520"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -384,6 +384,32 @@ func TestRegisterPlansBackfill(t *testing.T) {
 				t.Errorf("ensured = %v, want [%s]", planner.ensured, tc.want)
 			}
 		})
+	}
+}
+
+// The anchor must sit PAST the live cursor, not on it. Live ingestion only
+// starts deriving a contract once the ingesting process reloads its
+// registry; the ledgers closing inside that window would otherwise be
+// derived by nobody while coverage happily claimed them.
+func TestRegisterAnchorsPastTheLiveCursor(t *testing.T) {
+	planner := &fakePlanner{cursor: store.Cursor{Sequence: 500}}
+	srv := newTestServerWithPlanner(&fakeStore{}, planner, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(planner.ensured) != 1 {
+		t.Fatalf("ensured = %v", planner.ensured)
+	}
+	var anchor uint32
+	if _, err := fmt.Sscanf(planner.ensured[0], validContract+":1:%d", &anchor); err != nil {
+		t.Fatalf("parse anchor %q: %v", planner.ensured[0], err)
+	}
+	if anchor <= 500 {
+		t.Errorf("anchor = %d, must exceed the cursor (500) so the backfill overlaps the reload window", anchor)
 	}
 }
 

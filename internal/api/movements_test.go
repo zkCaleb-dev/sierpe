@@ -159,3 +159,53 @@ func TestMovementsCursorRoundTrip(t *testing.T) {
 		t.Errorf("decoded = %+v, want %+v", decoded, q)
 	}
 }
+
+// The row key is (transfer_id, role): a cursor that only carries the id
+// resumes past every row sharing it, so a page boundary inside a self
+// transfer drops one of its two rows permanently.
+func TestMovementsCursorCarriesTheRole(t *testing.T) {
+	id := "0000000000000000100-0000000000"
+	mr := &fakeMovementReader{
+		movements: []store.Movement{sampleMovement(id, store.RoleSender)},
+		hasMore:   true,
+	}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPIWithMovements(ev, defaultContractReader(), mr)
+	defer srv.Close()
+
+	var resp movementsResponse
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/movements?limit=1", &resp); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	mr.movements = []store.Movement{sampleMovement(id, store.RoleRecipient)}
+	mr.hasMore = false
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/movements?cursor="+resp.Cursor, &movementsResponse{}); code != 200 {
+		t.Fatalf("cursor page status = %d", code)
+	}
+	q := mr.queries[1]
+	if q.AfterID != id || q.AfterRole != store.RoleSender {
+		t.Errorf("resume position = (%q, %q), want the full row key", q.AfterID, q.AfterRole)
+	}
+}
+
+// An empty page for a kind the registration never derived is not a scan
+// that completed: nothing was ever there to scan (rule 7).
+func TestMovementsNeverReportCompleteForAnUnderivedKind(t *testing.T) {
+	mr := &fakeMovementReader{}
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	// defaultContractReader does not derive movements.
+	srv := newTestAPIWithMovements(ev, defaultContractReader(), mr)
+	defer srv.Close()
+
+	var resp movementsResponse
+	url := srv.URL + "/v1/contracts/" + registered + "/movements?startLedger=1&endLedger=5000"
+	if code := getJSON(t, url, &resp); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if resp.Coverage.KindDerived {
+		t.Fatal("fixture drifted: this contract must not derive movements")
+	}
+	if resp.ScanStatus == scanComplete {
+		t.Errorf("scanStatus = %s: an empty page from a kind that was never derived is not a completed scan", resp.ScanStatus)
+	}
+}

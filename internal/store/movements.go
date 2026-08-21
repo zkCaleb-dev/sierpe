@@ -25,11 +25,13 @@ const (
 )
 
 // Movement is one attribution of a token transfer to a contract that took
-// part in it. It shares its identity with the transfer (and therefore with
-// the event), so the raw row is always one join away.
+// part in it. TransferID is the shared identity of the underlying event,
+// not a foreign key: the emitting token is usually NOT registered, so a
+// transfers row generally does not exist. Every field a consumer needs is
+// carried here for that reason.
 type Movement struct {
 	ContractID      string // the watcher
-	TransferID      string // transfers.id
+	TransferID      string // the event id, shared with transfers when that row exists
 	Role            string // sender | recipient
 	TokenContractID string // the emitting token contract: the asset's identity
 	TransferType    string
@@ -82,8 +84,13 @@ type MovementQuery struct {
 	Type       string // transfer | mint | burn | clawback; "" = any
 	FromLedger uint32
 	ToLedger   uint32
-	AfterID    string // transfer id, ascending
-	Limit      int
+	// AfterID and AfterRole resume the walk. Both are needed: a
+	// self-transfer is one event with two attributions, so transfer_id
+	// alone is not unique and a page boundary landing between the two
+	// halves would skip one of them forever.
+	AfterID   string
+	AfterRole string
+	Limit     int
 }
 
 // QueryMovements returns up to Limit movements in chain order and whether
@@ -112,12 +119,14 @@ func (s *Store) QueryMovements(ctx context.Context, network string, q MovementQu
 		sql += fmt.Sprintf(" AND transfer_type = $%d", len(args))
 	}
 	if q.AfterID != "" {
-		args = append(args, q.AfterID)
-		sql += fmt.Sprintf(" AND transfer_id > $%d", len(args))
+		// Row-value comparison over the full sort key, matching the primary
+		// key exactly so the walk stays index-only.
+		args = append(args, q.AfterID, q.AfterRole)
+		sql += fmt.Sprintf(" AND (transfer_id, role) > ($%d, $%d)", len(args)-1, len(args))
 	}
 	// One extra row answers has-more without a second query.
 	args = append(args, q.Limit+1)
-	sql += fmt.Sprintf(" ORDER BY transfer_id LIMIT $%d", len(args))
+	sql += fmt.Sprintf(" ORDER BY transfer_id, role LIMIT $%d", len(args))
 
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {

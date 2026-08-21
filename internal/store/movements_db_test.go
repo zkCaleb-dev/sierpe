@@ -107,7 +107,10 @@ func TestQueryMovements(t *testing.T) {
 	if err != nil || !hasMore || len(page1) != 2 {
 		t.Fatalf("page 1 = %d hasMore = %v err = %v", len(page1), hasMore, err)
 	}
-	q.AfterID = page1[len(page1)-1].TransferID
+	// The resume position is the whole row key; half of it re-serves the
+	// boundary row (see TestQueryMovementsPagesAcrossRolesOfOneEvent).
+	last := page1[len(page1)-1]
+	q.AfterID, q.AfterRole = last.TransferID, last.Role
 	page2, hasMore2, err := s.QueryMovements(ctx, "testnet", q)
 	if err != nil || hasMore2 || len(page2) != 1 {
 		t.Fatalf("page 2 = %d hasMore = %v err = %v", len(page2), hasMore2, err)
@@ -142,5 +145,50 @@ func TestMovementAmountIsExact(t *testing.T) {
 	}
 	if rows[0].Counterparty != "" {
 		t.Errorf("a mint has no counterparty, got %q", rows[0].Counterparty)
+	}
+}
+
+// The row key is (transfer_id, role), so the keyset must be too. A page
+// boundary falling inside a self transfer used to drop one of its two rows
+// forever: resuming at transfer_id alone skipped every row sharing that id.
+func TestQueryMovementsPagesAcrossRolesOfOneEvent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE movements, cursor, ledger_hashes`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	selfTransfer := "0000000000000000100-0000000000"
+	seed := []Movement{
+		testMovement(selfTransfer, RoleRecipient, "CTOKEN", 100),
+		testMovement(selfTransfer, RoleSender, "CTOKEN", 100),
+		testMovement("0000000000000000200-0000000000", RoleRecipient, "CTOKEN", 200),
+	}
+	rec := LedgerRecord{Sequence: 200, Hash: "x", PreviousHash: "y", ClosedAt: time.Now().UTC()}
+	if err := s.CommitLedger(ctx, "testnet", rec, nil, nil, nil, nil, seed); err != nil {
+		t.Fatalf("CommitLedger() error = %v", err)
+	}
+
+	q := MovementQuery{ContractID: "CWATCHER", Limit: 1}
+	seen := map[string]bool{}
+	for page := 0; page < 5; page++ {
+		rows, hasMore, err := s.QueryMovements(ctx, "testnet", q)
+		if err != nil {
+			t.Fatalf("page %d error = %v", page, err)
+		}
+		for _, m := range rows {
+			key := m.TransferID + "/" + m.Role
+			if seen[key] {
+				t.Fatalf("page %d served %s twice", page, key)
+			}
+			seen[key] = true
+		}
+		if !hasMore {
+			break
+		}
+		last := rows[len(rows)-1]
+		q.AfterID, q.AfterRole = last.TransferID, last.Role
+	}
+	if len(seen) != 3 {
+		t.Errorf("walked %d rows across pages, want 3: %v", len(seen), seen)
 	}
 }

@@ -28,6 +28,12 @@ import (
 )
 
 // maxBodyBytes bounds admin request bodies; registration payloads are tiny.
+// registrationAnchorMargin is how far past the live cursor a new
+// registration anchors its backfill, in ledgers. It must exceed the worst
+// case for the ingesting process to pick up the new registration: the
+// 30-second periodic registry reload at roughly 5 seconds per ledger.
+const registrationAnchorMargin = 20
+
 const maxBodyBytes = 64 << 10
 
 // contractStore is the slice of the store the admin API consumes.
@@ -225,13 +231,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
 		return
 	}
-	// Anchor the history walk at the current cursor: live ingestion covers
-	// everything after it, the backfill worker walks everything before it
-	// down to the target.
+	// Anchor the history walk at the current cursor PLUS a margin: live
+	// ingestion only starts deriving this contract once the ingesting
+	// process reloads its snapshot, which may be another instance and may
+	// be up to one reload tick away. Anchoring exactly at the cursor would
+	// leave the ledgers closed inside that window derived by nobody while
+	// coverage claimed them. Overlapping instead is free — every insert
+	// path is idempotent — and the margin is generous enough to cover a
+	// missed post-mutation reload falling back on the periodic one.
 	nextTo := uint32(0)
 	switch cursor, err := s.planner.LoadCursor(r.Context(), s.network); {
 	case err == nil:
-		nextTo = cursor.Sequence
+		nextTo = cursor.Sequence + registrationAnchorMargin
 	case errors.Is(err, store.ErrNoCursor):
 		s.log.Warn("no ingestion cursor yet; history before this registration will not be backfilled",
 			"contract_id", saved.ContractID)

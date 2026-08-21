@@ -271,3 +271,51 @@ func TestEnsureBackfillReopensWhenAKindIsAdded(t *testing.T) {
 		t.Errorf("covered kinds = %v, want both", reopened.CoveredKinds)
 	}
 }
+
+// Dropping a kind must shrink covered_kinds without touching a finished
+// walk: coverage may never vouch for a kind the registration no longer
+// derives, but there is also nothing new to walk, so re-deriving all of
+// history would be pure waste.
+func TestEnsureBackfillNarrowsCoveredKindsWithoutReopening(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE backfill`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	seedContract(t, s, "CNARROW")
+
+	both := []string{KindEvents, KindMovements}
+	if err := s.EnsureBackfill(ctx, "testnet", "CNARROW", 1, 5000, both); err != nil {
+		t.Fatalf("EnsureBackfill() error = %v", err)
+	}
+	done := Backfill{ContractID: "CNARROW", TargetFrom: 1, NextTo: 0, Done: true}
+	if err := s.CommitBackfillChunk(ctx, "testnet", done, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitBackfillChunk() error = %v", err)
+	}
+
+	if err := s.EnsureBackfill(ctx, "testnet", "CNARROW", 1, 6000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() narrow error = %v", err)
+	}
+	b, err := s.GetBackfill(ctx, "testnet", "CNARROW")
+	if err != nil {
+		t.Fatalf("GetBackfill() error = %v", err)
+	}
+	if !b.Done || b.NextTo != 0 {
+		t.Errorf("narrowing must not reopen a finished walk: %+v", b)
+	}
+	if b.CoversKind(KindMovements) {
+		t.Errorf("covered_kinds = %v, must not vouch for a dropped kind", b.CoveredKinds)
+	}
+	if !b.CoversKind(KindEvents) {
+		t.Errorf("covered_kinds = %v, lost a kind that is still derived", b.CoveredKinds)
+	}
+
+	// Adding it back reopens the walk: that history was never derived with it.
+	if err := s.EnsureBackfill(ctx, "testnet", "CNARROW", 1, 6000, both); err != nil {
+		t.Fatalf("EnsureBackfill() re-add error = %v", err)
+	}
+	b, _ = s.GetBackfill(ctx, "testnet", "CNARROW")
+	if b.Done || b.NextTo != 6000 {
+		t.Errorf("re-adding a kind must reopen the walk at the anchor: %+v", b)
+	}
+}

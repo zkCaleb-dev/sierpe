@@ -12,6 +12,12 @@
 -- identical no matter who the row is about, so a second row collides on the
 -- primary key, aborts the ledger transaction and stalls ingestion (rule 1).
 --
+-- transfer_id is the SHARED IDENTITY of the underlying event, not a foreign
+-- key: in this kind's main use case the emitting token is not registered at
+-- all, so no transfers (and no events) row exists to join to. Every column
+-- a consumer needs is therefore carried here, and these rows cannot be
+-- re-derived from Sierpe's own database — only from the chain.
+--
 -- role is part of the key because a self-transfer (from == to == C) is one
 -- event that legitimately produces two attributions.
 
@@ -35,9 +41,12 @@ CREATE TABLE movements (
     PRIMARY KEY (network, contract_id, transfer_id, role)
 );
 
--- The canonical read path: one contract's movements in chain order.
-CREATE INDEX movements_by_contract
-    ON movements (network, contract_id, transfer_id);
+-- The canonical read path — one contract's movements in chain order — is
+-- served by the primary key itself: (network, contract_id) equality then
+-- (transfer_id, role) ordering is exactly its column order. A separate
+-- index on a prefix of the primary key would be pure write cost inside the
+-- rule-1 commit transaction, so there is none.
+--
 -- Filtering one contract's movements by the token that moved.
 CREATE INDEX movements_by_token
     ON movements (network, contract_id, token_contract_id, transfer_id);
