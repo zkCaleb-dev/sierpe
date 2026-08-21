@@ -29,12 +29,23 @@ const (
 	maxBodyBytes   = 64 << 20 // a single mainnet ledger's meta can be large
 )
 
+// errResponseTooLarge means the endpoint answered with a body past the cap
+// this client is willing to hold in memory. It is NOT an outage and NOT a
+// malformed answer: the same request would produce the same oversized
+// reply from any endpoint, so failing over is pointless and retrying
+// unchanged is an infinite loop. The caller shrinks its request instead.
+var errResponseTooLarge = errors.New("rpc: response exceeds the client body cap")
+
 // Client is a failover pool of Stellar RPC endpoints.
 type Client struct {
 	urls      []string
 	http      *http.Client
 	preferred atomic.Int32 // index of the last endpoint that answered
 	failovers atomic.Int64
+	// bodyCap is the largest response this client will hold in memory.
+	// A field rather than the bare constant so tests can exercise the
+	// overflow path without moving 64 MB around.
+	bodyCap int
 }
 
 // New builds a Client over the given endpoint pool. The pool must not be
@@ -44,8 +55,9 @@ func New(urls []string) (*Client, error) {
 		return nil, errors.New("rpc: endpoint pool is empty")
 	}
 	return &Client{
-		urls: urls,
-		http: &http.Client{Timeout: attemptTimeout},
+		urls:    urls,
+		http:    &http.Client{Timeout: attemptTimeout},
+		bodyCap: maxBodyBytes,
 	}, nil
 }
 
@@ -158,10 +170,31 @@ const maxBatchLimit = 200
 // GetLedgerBatch fetches up to limit consecutive ledgers ascending from
 // start. It returns what the endpoint served (possibly fewer than limit);
 // window errors classify exactly like GetLedger.
+// GetLedgerBatch fetches up to limit ledgers starting at start. It may
+// return FEWER than asked for: ledger meta size is data-dependent and
+// unbounded, so a batch that is fine over a quiet range can be hundreds of
+// megabytes over a busy one. When the answer overflows the body cap this
+// halves the request and tries again, down to a single ledger, because a
+// caller that keeps asking for the same oversized batch never advances.
+// Callers already tolerate short batches (the RPC caps pagination anyway).
 func (c *Client) GetLedgerBatch(ctx context.Context, start uint32, limit int) ([]xdr.LedgerCloseMeta, error) {
 	if limit > maxBatchLimit {
 		limit = maxBatchLimit
 	}
+	if limit < 1 {
+		limit = 1
+	}
+	for {
+		out, err := c.getLedgerBatchOnce(ctx, start, limit)
+		if errors.Is(err, errResponseTooLarge) && limit > 1 {
+			limit /= 2
+			continue
+		}
+		return out, err
+	}
+}
+
+func (c *Client) getLedgerBatchOnce(ctx context.Context, start uint32, limit int) ([]xdr.LedgerCloseMeta, error) {
 	params := map[string]any{
 		"startLedger": start,
 		"pagination":  map[string]any{"limit": limit},
@@ -263,6 +296,12 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		if errors.As(err, &rpcErr) {
 			return err
 		}
+		// Same reasoning for an oversized answer: the endpoint is healthy
+		// and every other one would send the same bytes. Burning the pool
+		// on it only delays the caller shrinking its request.
+		if errors.Is(err, errResponseTooLarge) {
+			return err
+		}
 		lastErr = err
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -297,9 +336,20 @@ func (c *Client) callOne(ctx context.Context, endpoint, method string, params, o
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	// Read ONE byte past the cap so a body that hits it is distinguishable
+	// from a body that merely ends there. A plain LimitReader cannot tell
+	// those apart: it stops without an error and hands the decoder a
+	// perfectly truncated document, which then blames the JSON for what
+	// this client did to it (CLAUDE.md rule 6 — a guard that hides its own
+	// effect is not a guard). This is not hypothetical: 200 ledgers of a
+	// busy testnet range weigh ~151 MB, and the silent cut stalled a real
+	// backfill permanently, retrying the identical oversized request.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(c.bodyCap)+1))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > c.bodyCap {
+		return fmt.Errorf("%w: %s answered with more than %d bytes", errResponseTooLarge, method, c.bodyCap)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("http %d from %s", resp.StatusCode, method)
