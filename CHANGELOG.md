@@ -6,6 +6,17 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Documentation
+
+- `Coverage.indexedFromLedger` can legitimately exceed `indexedToLedger`
+  for about a reload interval after a registration: the backfill anchor
+  now sits past the live cursor, so until ingestion reaches it the covered
+  window is EMPTY rather than inverted-by-mistake. The scan statuses are
+  correct throughout (a bounded query below the frontier gets
+  `OLDEST_REACHED`, not `COMPLETE`), but a client computing a span from
+  the two numbers gets a negative, so the spec now says so. Found by
+  smoke-testing the v1.5.0 image against testnet.
+
 ## [1.5.0] - 2026-08-21
 
 ### Added
