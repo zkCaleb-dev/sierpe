@@ -241,3 +241,64 @@ func TestFindWall(t *testing.T) {
 		}
 	}
 }
+
+// levelRecorder captures the levels and messages the backfiller logs.
+type levelRecorder struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (r *levelRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (r *levelRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, rec)
+	return nil
+}
+func (r *levelRecorder) WithAttrs([]slog.Attr) slog.Handler { return r }
+func (r *levelRecorder) WithGroup(string) slog.Handler      { return r }
+
+func (r *levelRecorder) worst() slog.Level {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	worst := slog.LevelDebug
+	for _, rec := range r.records {
+		if rec.Level > worst {
+			worst = rec.Level
+		}
+	}
+	return worst
+}
+
+// A fresh registration deliberately anchors its walk past the live cursor,
+// so the first chunk asks for ledgers that have not closed yet. That is the
+// design working, not a failure: logging it as one trains the operator to
+// ignore the line that does mean something. It must also resolve itself
+// once the tip advances, without any intervention.
+func TestBackfillAnchoredPastTheTipWaitsInsteadOfFailing(t *testing.T) {
+	src := &fakeChunkChain{oldest: 1, tip: 4980}
+	st := newFakeBackfillStore(job("CAAA", 4000, 5000)) // anchor 20 past the tip
+	rec := &levelRecorder{}
+	b := NewBackfiller("testnet", "test-pass", src, st, nopInstruments{}, slog.New(rec))
+
+	if b.round(context.Background()) {
+		t.Error("a chunk that reaches past the tip did no real work")
+	}
+	if lvl := rec.worst(); lvl >= slog.LevelWarn {
+		t.Errorf("worst log level = %v, want below WARN: waiting for the anchor is expected", lvl)
+	}
+	if len(st.order) != 0 {
+		t.Errorf("nothing may be committed while the anchor is in the future: %v", st.order)
+	}
+
+	// The tip catches up: the same job now completes with no intervention.
+	src.tip = 5000
+	if !b.round(context.Background()) {
+		t.Fatal("the walk did not resume once the anchor closed")
+	}
+	// The span (4000..5000) is under one chunk, so the walk finishes it in
+	// a single commit and lands the watermark just below the target.
+	if bf := st.backfill("CAAA"); bf.NextTo != 3999 || !bf.Done {
+		t.Errorf("backfill = %+v, want the chunk landed and the walk done", bf)
+	}
+}
