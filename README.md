@@ -108,7 +108,9 @@ are documented in [docs/METRICS.md](docs/METRICS.md).
 | v1.2 ✅ | Archive replay: history below RPC retention healed from the public archives (`-full` image) |
 | v1.3 ✅ | Embedded management UI at `/` and the contract listing endpoint |
 | v1.4 ✅ | Optional whole-surface Basic Auth for public-domain deployments |
-| v2 | Push delivery: signed webhooks, broker sinks, management UI |
+| v1.5 ✅ | Token movements (transfers a contract takes part in, whoever emitted them) and per-kind coverage |
+| v1.6 | Contract-class discovery: register a wasm hash, index every contract deployed from it |
+| v2 | Push delivery: signed webhooks, broker sinks; MCP server under exploration |
 
 ## License
 
