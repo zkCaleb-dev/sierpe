@@ -62,6 +62,9 @@ for mainnet.
 
 ## Railway
 
+The one-click path is the published template (see the README button).
+Manual setup:
+
 1. Create a project with a **Postgres** service.
 2. Add a service from this GitHub repo — Railway builds the Dockerfile.
 3. Set the variables: `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`,
