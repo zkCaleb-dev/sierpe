@@ -8,6 +8,23 @@ All notable changes to Sierpe are documented here. The format follows
 
 ### Fixed
 
+- **A backfill could stall permanently on a busy ledger range.** The RPC
+  client capped response bodies with an `io.LimitReader`, which stops
+  reading without reporting that it did — so an oversized answer reached
+  the decoder as a perfectly truncated document and surfaced as
+  `unexpected end of JSON input`, the client blaming the server for its
+  own cut. The failure is deterministic: the same request produces the
+  same oversized reply forever, so the walk retried it every 40 seconds
+  and never advanced again, while coverage kept reporting the backfill as
+  merely pending. Found on the live deployment, where 200 ledgers of a
+  busy testnet range weigh ~151 MB against a 64 MB cap.
+
+  The client now detects the overflow and names it, and `GetLedgerBatch`
+  halves its request down to a single ledger until the answer fits —
+  ledger meta size is data-dependent and unbounded, so no fixed batch size
+  is safe. An oversized answer no longer burns the endpoint pool either:
+  every endpoint would send the same bytes.
+
 - The backfill logged a WARN saying a chunk had FAILED every time a
   contract was registered. Nothing had failed: the anchor now sits a margin
   past the live cursor, so the first chunk asks for ledgers that have not
