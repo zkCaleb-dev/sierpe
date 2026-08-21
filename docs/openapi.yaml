@@ -572,7 +572,17 @@ components:
           type: integer
           nullable: true
           description: null means the query follows the tip.
-        indexedFromLedger: { type: integer }
+        indexedFromLedger:
+          type: integer
+          description: >
+            Oldest ledger vouched for. Right after a registration this can
+            be GREATER than indexedToLedger: the backfill is anchored a
+            little past the live cursor so the ledgers closing while the
+            ingesting process reloads its registry are walked by somebody.
+            An inverted pair is not an error, it is an EMPTY window — the
+            instance vouches for nothing yet — and it closes on its own
+            within a reload interval. Do not compute a span from these two
+            numbers without checking the order first.
         indexedToLedger: { type: integer }
         backfillPending:
           type: boolean
