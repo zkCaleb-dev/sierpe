@@ -48,5 +48,5 @@ docker manifest inspect ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z | grep architecture
   boot, register a contract, watch `/status` reach ready.
 - `sierpe version` on one downloaded binary prints the tag.
 
-Then publish the draft release and update the Railway template to the new
-image tag.
+Then publish the draft release and update the Railway template image pin
+to the new tag (docs/RAILWAY-TEMPLATE.md).
