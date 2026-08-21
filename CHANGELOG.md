@@ -6,6 +6,17 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The backfill logged a WARN saying a chunk had FAILED every time a
+  contract was registered. Nothing had failed: the anchor now sits a margin
+  past the live cursor, so the first chunk asks for ledgers that have not
+  closed yet and the source correctly refuses them. It resolves itself as
+  the tip advances. A log line that cries wolf on a routine operation
+  trains the operator to ignore the line that means something, so this is
+  now an INFO saying what is actually happening. Found by watching the
+  logs of the first real deployment right after registering a kind.
+
 ### Documentation
 
 - `Coverage.indexedFromLedger` can legitimately exceed `indexedToLedger`

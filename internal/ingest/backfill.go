@@ -107,7 +107,19 @@ func (b *Backfiller) round(ctx context.Context) bool {
 			return worked
 		}
 		if err := b.processChunk(ctx, job); err != nil {
-			if ctx.Err() == nil {
+			switch {
+			case ctx.Err() != nil:
+			case errors.Is(err, source.ErrNotYetAvailable):
+				// EXPECTED, not a failure: a fresh registration anchors its
+				// walk a margin past the live cursor so the ledgers closing
+				// during the registry reload belong to somebody. Those
+				// ledgers have not closed yet, so the first chunk asks for
+				// the future and the source rightly says no. It resolves
+				// itself as the tip advances; calling it a failure trains
+				// the operator to ignore the log line that means something.
+				b.log.Info("backfill: waiting for the registration anchor to close",
+					"contract_id", job.Contract.ContractID, "anchor", job.Backfill.NextTo)
+			default:
 				b.log.Warn("backfill: chunk failed, will retry",
 					"contract_id", job.Contract.ContractID, "err", err)
 			}
