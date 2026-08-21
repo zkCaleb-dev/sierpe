@@ -47,8 +47,15 @@ paths:
                   description: C... strkey contract address.
                 kinds:
                   type: array
-                  items: { type: string, enum: [events] }
-                  description: Data kinds to derive. Defaults to ["events"].
+                  items:
+                    type: string
+                    enum: [events, state, transfers, trustlines]
+                  description: >
+                    Data kinds to derive. Defaults to the classified set:
+                    [events, state] for wasm contracts, plus transfers for
+                    SACs. Adding a kind to an existing registration reopens
+                    the history walk, because a finished walk never derived
+                    it (see the coverage schema).
                 from:
                   description: >
                     Backfill origin: the string "genesis" (default) or a
@@ -72,7 +79,6 @@ paths:
         "502":
           description: The chain could not be read to classify; retry later.
 
-  /v1/contracts:
     get:
       tags: [public]
       summary: List registered contracts
@@ -478,7 +484,10 @@ components:
         - $ref: "#/components/schemas/Contract"
         - type: object
           properties:
-            coverage: { $ref: "#/components/schemas/Coverage" }
+            coverage:
+              type: array
+              description: One declaration per registered kind.
+              items: { $ref: "#/components/schemas/Coverage" }
             events:
               type: object
               properties:
@@ -489,8 +498,22 @@ components:
 
     Coverage:
       type: object
-      description: The range this instance can vouch for (rule 7).
+      description: >
+        The range this instance can vouch for, FOR ONE KIND (rule 7).
+        Coverage is a property of (contract, kind): a walk derives only the
+        kinds the registration carried while it ran, so a kind added later
+        is not covered below the anchor until the walk is reopened.
       properties:
+        kind:
+          type: string
+          enum: [events, state, transfers, trustlines]
+          description: The data kind this declaration is about.
+        kindDerived:
+          type: boolean
+          description: >
+            False when the registration does not derive this kind at all —
+            an empty page then means "not indexed", never "nothing
+            happened", and indexedFrom/To are 0.
         requestedFromLedger: { type: integer }
         requestedToLedger:
           type: integer

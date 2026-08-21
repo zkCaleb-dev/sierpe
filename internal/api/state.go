@@ -49,10 +49,11 @@ type stateSnapshotResponse struct {
 }
 
 func (s *Server) handleStateSnapshot(w http.ResponseWriter, r *http.Request, state stateReader) {
-	contractID, ok := s.knownContract(w, r)
+	contract, ok := s.knownContract(w, r)
 	if !ok {
 		return
 	}
+	contractID := contract.ContractID
 
 	q := store.StateQuery{ContractID: contractID, Limit: defaultLimit}
 	params := r.URL.Query()
@@ -91,7 +92,7 @@ func (s *Server) handleStateSnapshot(w http.ResponseWriter, r *http.Request, sta
 
 	resp := stateSnapshotResponse{
 		Entries: make([]stateEntryRecord, 0, len(entries)),
-		Coverage: s.coverage(r.Context(), contractID,
+		Coverage: s.coverage(r.Context(), contract, store.KindState,
 			store.EventQuery{ContractID: contractID, FromLedger: 1}, cursorSeq),
 		LatestLedger: cursorSeq,
 	}
@@ -138,10 +139,11 @@ type stateHistoryResponse struct {
 }
 
 func (s *Server) handleStateHistory(w http.ResponseWriter, r *http.Request, state stateReader) {
-	contractID, ok := s.knownContract(w, r)
+	contract, ok := s.knownContract(w, r)
 	if !ok {
 		return
 	}
+	contractID := contract.ContractID
 
 	q := store.StateQuery{ContractID: contractID, FromLedger: 1, Limit: defaultLimit}
 	params := r.URL.Query()
@@ -195,7 +197,7 @@ func (s *Server) handleStateHistory(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	cursorSeq := s.cursorSequence(r.Context())
-	coverage := s.coverage(r.Context(), contractID,
+	coverage := s.coverage(r.Context(), contract, store.KindState,
 		store.EventQuery{ContractID: contractID, FromLedger: q.FromLedger, ToLedger: q.ToLedger}, cursorSeq)
 
 	if len(changes) > 0 {
@@ -230,24 +232,27 @@ func (s *Server) handleStateHistory(w http.ResponseWriter, r *http.Request, stat
 
 // --- shared helpers ---------------------------------------------------------
 
-// knownContract validates the path id and 404s unregistered contracts.
-func (s *Server) knownContract(w http.ResponseWriter, r *http.Request) (string, bool) {
+// knownContract validates the path id and 404s unregistered contracts. It
+// returns the registration itself, because coverage is a property of
+// (contract, kind) and every handler needs the kinds to declare it.
+func (s *Server) knownContract(w http.ResponseWriter, r *http.Request) (store.Contract, bool) {
 	contractID := r.PathValue("id")
 	if !strkey.IsValidContractAddress(contractID) {
 		writeError(w, http.StatusBadRequest,
 			fmt.Sprintf("contract id %q is not a valid contract address (C... strkey)", contractID))
-		return "", false
+		return store.Contract{}, false
 	}
-	if _, err := s.contracts.GetContract(r.Context(), s.network, contractID); err != nil {
+	contract, err := s.contracts.GetContract(r.Context(), s.network, contractID)
+	if err != nil {
 		if errors.Is(err, store.ErrNoContract) {
 			writeError(w, http.StatusNotFound,
 				fmt.Sprintf("contract %s is not registered; register it via POST /v1/contracts", contractID))
-			return "", false
+			return store.Contract{}, false
 		}
 		s.serverError(w, "contract lookup failed", err)
-		return "", false
+		return store.Contract{}, false
 	}
-	return contractID, true
+	return contract, true
 }
 
 // cursorSequence reads the live cursor, tolerating a fresh database.

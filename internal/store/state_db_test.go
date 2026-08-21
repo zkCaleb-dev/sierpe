@@ -62,7 +62,7 @@ func TestStateSnapshotOrderingGuard(t *testing.T) {
 	// A descending backfill then replays ledger 100: it must NOT overwrite.
 	b := Backfill{ContractID: "CAAA", TargetFrom: 1, NextTo: 99}
 	seedContract(t, s, "CAAA")
-	if err := s.EnsureBackfill(context.Background(), "testnet", "CAAA", 1, 150); err != nil {
+	if err := s.EnsureBackfill(context.Background(), "testnet", "CAAA", 1, 150, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 	old := stateChange("0000000000000000100-0000000000", 100, "kA", "updated", "v100")
@@ -106,7 +106,7 @@ func TestStateTombstoneBlocksStaleResurrection(t *testing.T) {
 
 	// Backfill replays its creation at ledger 100: the tombstone must hold.
 	seedContract(t, s, "CAAA")
-	if err := s.EnsureBackfill(context.Background(), "testnet", "CAAA", 1, 200); err != nil {
+	if err := s.EnsureBackfill(context.Background(), "testnet", "CAAA", 1, 200, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 	b := Backfill{ContractID: "CAAA", TargetFrom: 1, NextTo: 99}

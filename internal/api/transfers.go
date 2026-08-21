@@ -48,10 +48,11 @@ type transfersResponse struct {
 }
 
 func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request, transfers transfersReader) {
-	contractID, ok := s.knownContract(w, r)
+	contract, ok := s.knownContract(w, r)
 	if !ok {
 		return
 	}
+	contractID := contract.ContractID
 
 	q := store.TransferQuery{ContractID: contractID, FromLedger: 1, Limit: defaultLimit}
 	params := r.URL.Query()
@@ -120,7 +121,7 @@ func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request, transfe
 		return
 	}
 	cursorSeq := s.cursorSequence(r.Context())
-	coverage := s.coverage(r.Context(), contractID,
+	coverage := s.coverage(r.Context(), contract, store.KindTransfers,
 		store.EventQuery{ContractID: contractID, FromLedger: q.FromLedger, ToLedger: q.ToLedger}, cursorSeq)
 
 	if len(rows) > 0 {

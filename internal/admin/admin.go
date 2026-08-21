@@ -40,7 +40,7 @@ type contractStore interface {
 // small consumer-side interfaces, one per concern).
 type backfillPlanner interface {
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
-	EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32) error
+	EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32, kinds []string) error
 }
 
 // reloader republishes the registry snapshot after a mutation.
@@ -239,7 +239,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
 		return
 	}
-	if err := s.planner.EnsureBackfill(r.Context(), s.network, saved.ContractID, targetFrom, nextTo); err != nil {
+	if err := s.planner.EnsureBackfill(r.Context(), s.network, saved.ContractID, targetFrom, nextTo, saved.Kinds); err != nil {
 		s.log.Error("backfill planning failed", "contract_id", saved.ContractID, "err", err)
 		writeError(w, http.StatusInternalServerError, "registration failed; see server logs")
 		return

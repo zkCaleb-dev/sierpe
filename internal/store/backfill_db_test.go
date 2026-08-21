@@ -26,7 +26,7 @@ func TestEnsureBackfillLifecycle(t *testing.T) {
 	seedContract(t, s, "CAAA")
 
 	// Create with target 100.
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 	b, err := s.GetBackfill(ctx, "testnet", "CAAA")
@@ -42,7 +42,7 @@ func TestEnsureBackfillLifecycle(t *testing.T) {
 		Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 3000}, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() repeat error = %v", err)
 	}
 	b, _ = s.GetBackfill(ctx, "testnet", "CAAA")
@@ -55,7 +55,7 @@ func TestEnsureBackfillLifecycle(t *testing.T) {
 	if err := s.CommitBackfillChunk(ctx, "testnet", done, nil, nil, nil, nil); err != nil {
 		t.Fatalf("CommitBackfillChunk() error = %v", err)
 	}
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() deepen error = %v", err)
 	}
 	b, _ = s.GetBackfill(ctx, "testnet", "CAAA")
@@ -76,7 +76,7 @@ func TestBackfillCreatedDoneWhenNothingToWalk(t *testing.T) {
 	seedContract(t, s, "CAAA")
 
 	// nextTo 0 (no cursor yet): nothing to walk, done at birth.
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 0); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 0, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 	b, err := s.GetBackfill(ctx, "testnet", "CAAA")
@@ -103,7 +103,7 @@ func TestListPendingBackfillsJoinsContract(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 	seedContract(t, s, "CAAA")
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestCommitBackfillChunkPersistsEventsAtomically(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 	seedContract(t, s, "CAAA")
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestDeleteContractRemovesBackfill(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 	seedContract(t, s, "CAAA")
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 
@@ -204,11 +204,11 @@ func TestListPendingBackfillsOrdersByProgress(t *testing.T) {
 	}
 	seedContract(t, s, "CAAA")
 	seedContract(t, s, "CBBB")
-	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 1, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	if err := s.EnsureBackfill(ctx, "testnet", "CBBB", 1, 5000); err != nil {
+	if err := s.EnsureBackfill(ctx, "testnet", "CBBB", 1, 5000, []string{KindEvents}); err != nil {
 		t.Fatalf("EnsureBackfill() error = %v", err)
 	}
 
@@ -218,5 +218,59 @@ func TestListPendingBackfillsOrdersByProgress(t *testing.T) {
 	}
 	if len(pending) != 2 || pending[0].Contract.ContractID != "CAAA" {
 		t.Errorf("order = %v, want CAAA first (stalest progress)", pending)
+	}
+}
+
+func TestEnsureBackfillReopensWhenAKindIsAdded(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE backfill, contracts`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	// A finished walk that derived events only.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 5000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() error = %v", err)
+	}
+	if err := s.CommitBackfillChunk(ctx, "testnet",
+		Backfill{ContractID: "CAAA", TargetFrom: 100, NextTo: 99, Done: true},
+		nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitBackfillChunk() error = %v", err)
+	}
+	done, err := s.GetBackfill(ctx, "testnet", "CAAA")
+	if err != nil || !done.Done || !done.CoversKind(KindEvents) {
+		t.Fatalf("setup: backfill = %+v err = %v", done, err)
+	}
+
+	// Re-registering with the SAME kinds must not disturb a finished walk.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 9000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill(same kinds) error = %v", err)
+	}
+	if same, _ := s.GetBackfill(ctx, "testnet", "CAAA"); !same.Done || same.NextTo != 99 {
+		t.Errorf("same kinds must preserve progress, got %+v", same)
+	}
+
+	// Adding a kind must reopen the walk at the new anchor: the finished walk
+	// never derived transfers, so its history is not covered and the row must
+	// not keep claiming otherwise.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 100, 9000,
+		[]string{KindEvents, KindTransfers}); err != nil {
+		t.Fatalf("EnsureBackfill(new kind) error = %v", err)
+	}
+	reopened, err := s.GetBackfill(ctx, "testnet", "CAAA")
+	if err != nil {
+		t.Fatalf("GetBackfill() error = %v", err)
+	}
+	if reopened.Done {
+		t.Error("adding a kind must reopen the walk")
+	}
+	if reopened.NextTo != 9000 {
+		t.Errorf("reopened walk must restart at the anchor, got next_to = %d", reopened.NextTo)
+	}
+	if reopened.TargetFrom != 100 {
+		t.Errorf("reopening must preserve the original floor, got target_from = %d", reopened.TargetFrom)
+	}
+	if !reopened.CoversKind(KindTransfers) || !reopened.CoversKind(KindEvents) {
+		t.Errorf("covered kinds = %v, want both", reopened.CoveredKinds)
 	}
 }
