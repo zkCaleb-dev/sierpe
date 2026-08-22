@@ -1,7 +1,8 @@
 # Railway template — maintainer runbook
 
-**Published template**: `https://railway.com/deploy/pk6tCs` (created
-2026-08-22 from the dashboard; referral code `tuEgvN` is the maintainer's
+**Published template**: `https://railway.com/deploy/sierpe` (marketplace
+listing, category Analytics; the raw share link `railway.com/deploy/pk6tCs`
+also works). Created and published 2026-08-22 from the dashboard; referral code `tuEgvN` is the maintainer's
 and is optional on the link). Edit it at Workspace → Templates → Sierpe.
 
 The template is the one-click front door (DESIGN §11). Railway templates
