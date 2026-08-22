@@ -6,6 +6,19 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Sierpe did not work under pgx's simple protocol, which is what a user
+  has to select (`default_query_exec_mode=simple_protocol` in
+  `DATABASE_URL`) to sit behind a transaction-mode pooler that does not
+  support prepared statements. Both jsonb writers relied on the extended
+  protocol's type hints: event topics went out as a Postgres array
+  literal and a contract's classification as bytea hex, and jsonb
+  rejected both with `invalid input syntax for type json`. Both now send
+  JSON text explicitly, which behaves identically in either protocol, and
+  the store suite runs under the simple protocol as a regression test.
+  Found while mapping which Postgres providers Sierpe can run against.
+
 ## [1.5.1] - 2026-08-21
 
 ### Fixed

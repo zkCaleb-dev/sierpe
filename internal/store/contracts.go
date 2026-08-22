@@ -43,7 +43,7 @@ func (s *Store) UpsertContract(ctx context.Context, c Contract) (Contract, error
 		    kinds          = EXCLUDED.kinds,
 		    classification = COALESCE(EXCLUDED.classification, contracts.classification)
 		RETURNING network, contract_id, source, kinds, classification, registered_at`,
-		c.Network, c.ContractID, c.Source, c.Kinds, c.Classification,
+		c.Network, c.ContractID, c.Source, c.Kinds, jsonbParam(c.Classification),
 	)
 	var out Contract
 	if err := row.Scan(&out.Network, &out.ContractID, &out.Source, &out.Kinds,
@@ -129,4 +129,16 @@ func (s *Store) ListContracts(ctx context.Context, network string) ([]Contract, 
 		return nil, fmt.Errorf("store: list contracts: %w", err)
 	}
 	return out, nil
+}
+
+// jsonbParam prepares raw JSON for a jsonb parameter in a way that works
+// under BOTH pgx protocols: as text, because under the simple protocol a
+// []byte is sent as bytea hex, which jsonb rejects; and as NULL when empty,
+// because "" is not a JSON document and the upsert relies on NULL to keep
+// the stored classification when a re-registration carries none.
+func jsonbParam(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
 }

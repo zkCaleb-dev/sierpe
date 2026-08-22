@@ -27,12 +27,19 @@ func sameJSON(t *testing.T, got, want []byte) bool {
 // SIERPE_TEST_DATABASE_URL, migrates it, and empties the contracts table.
 // Without the variable the test skips, keeping the default unit run
 // hermetic; the e2e harness (Docker scratch Postgres) provides it.
-func openTestStore(t *testing.T) *Store {
+// testDatabaseURL returns the throwaway database URL or skips the test.
+func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 	url := os.Getenv("SIERPE_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("SIERPE_TEST_DATABASE_URL not set; skipping database-backed test")
 	}
+	return url
+}
+
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	url := testDatabaseURL(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
