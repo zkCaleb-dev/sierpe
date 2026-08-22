@@ -1,16 +1,19 @@
 # Sierpe
 
-> **Status: v1.4.0.** The design is stable
-> ([docs/DESIGN.md](docs/DESIGN.md)) and the v1 surface (events + contract
-> state) is feature-complete and verified live against testnet. Expect
-> pre-1.x-maturity rough edges; issues and feedback are welcome.
+> **Status: v1.5.2.** The design is stable
+> ([docs/DESIGN.md](docs/DESIGN.md)); events, contract state, token
+> transfers, trustlines and token movements are feature-complete and run
+> in production against testnet. Issues and feedback are welcome.
 
 **Your own Stellar indexer, deployed in minutes.**
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/pk6tCs?referralCode=tuEgvN)
+
 Sierpe is a self-hosted server that watches the Stellar network for the
 contracts *you* register and keeps their complete history — events,
-contract state, decoded token transfers, and the classic trustlines of
-SAC assets — in your own Postgres, behind an honest REST API.
+contract state, decoded token transfers, the classic trustlines of SAC
+assets, and every token movement in or out of a contract — in your own
+Postgres, behind an honest REST API and a built-in UI.
 
 ```
 1. Deploy the container next to an empty Postgres
