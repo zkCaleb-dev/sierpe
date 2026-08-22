@@ -7,7 +7,7 @@
 
 **Your own Stellar indexer, deployed in minutes.**
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/pk6tCs?referralCode=tuEgvN)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/sierpe?referralCode=tuEgvN)
 
 Sierpe is a self-hosted server that watches the Stellar network for the
 contracts *you* register and keeps their complete history — events,
