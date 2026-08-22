@@ -7,6 +7,7 @@
 //	replay    re-ingest a ledger range beside the live process (not yet built)
 //	rederive  rebuild derived tables from stored raw data (not yet built)
 //	reseed    rebuild the contract watchlist from the database (not yet built)
+//	healthcheck  probe the local /health endpoint and exit 0/1 (container HEALTHCHECK)
 //	version   print build information
 package main
 
@@ -20,6 +21,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/zkCaleb-dev/sierpe/internal/admin"
 	"github.com/zkCaleb-dev/sierpe/internal/api"
@@ -50,6 +53,16 @@ func main() {
 	case "version":
 		fmt.Printf("sierpe %s\n", version)
 		return
+	case "healthcheck":
+		// The image is distroless: no shell, no curl. Platforms whose
+		// health check runs INSIDE the container (Docker HEALTHCHECK,
+		// Swarm, Coolify, Dokploy, CapRover, NAS UIs) need the probe to
+		// be the binary itself.
+		if err := healthcheck(); err != nil {
+			fmt.Fprintf(os.Stderr, "sierpe healthcheck: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	case "run":
 		err = run(log, true)
 	case "serve":
@@ -58,13 +71,62 @@ func main() {
 		fmt.Fprintf(os.Stderr, "sierpe %s: %q is not implemented yet (see docs/DESIGN.md milestones)\n", version, cmd)
 		os.Exit(1)
 	default:
-		fmt.Fprintf(os.Stderr, "sierpe: unknown command %q\nusage: sierpe [run|serve|replay|rederive|reseed|version]\n", cmd)
+		fmt.Fprintf(os.Stderr, "sierpe: unknown command %q\nusage: sierpe [run|serve|healthcheck|replay|rederive|reseed|version]\n", cmd)
 		os.Exit(2)
 	}
 	if err != nil {
-		log.Error("sierpe terminated", "err", err)
+		if hint := poolerHint(err); hint != "" {
+			log.Error("sierpe terminated", "err", err, "hint", hint)
+		} else {
+			log.Error("sierpe terminated", "err", err)
+		}
 		os.Exit(1)
 	}
+}
+
+// healthcheck probes the local /health endpoint the way a container
+// runtime would. It reads HTTP_PORT the same way the server does so the
+// probe and the listener can never disagree.
+func healthcheck() error {
+	port := "8080"
+	if p := os.Getenv("HTTP_PORT"); p != "" {
+		port = p
+	}
+	return probe("http://127.0.0.1:" + port + "/health")
+}
+
+// probe is the healthcheck's testable core: one GET, short deadline, 200 or
+// an error that names what it saw.
+func probe(url string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %d", url, resp.StatusCode)
+	}
+	return nil
+}
+
+// poolerHint recognizes the failure signature of a transaction-mode
+// connection pooler that does not support protocol-level prepared
+// statements (older PgBouncer, some managed pools): Postgres reports the
+// statement as missing or already present because each query landed on a
+// different backend. The fix is one URL parameter, and the operator should
+// not have to know pgx internals to find it.
+func poolerHint(err error) string {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return ""
+	}
+	switch pgErr.Code {
+	case "26000", "42P05": // invalid_sql_statement_name, duplicate_prepared_statement
+		return "this looks like a transaction-mode connection pooler without prepared-statement support; " +
+			"append default_query_exec_mode=simple_protocol to DATABASE_URL, or connect to the database (or a session-mode pool) directly"
+	}
+	return ""
 }
 
 // run boots the appliance. With ingestion disabled it serves only the
