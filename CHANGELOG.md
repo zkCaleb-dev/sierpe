@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-08-21
+
 ### Added
 
 - `sierpe healthcheck`: probes the local `/health` endpoint and exits
