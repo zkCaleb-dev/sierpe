@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -59,7 +60,7 @@ func insertEvents(ctx context.Context, tx pgx.Tx, network string, events []Event
 			ON CONFLICT ON CONSTRAINT events_idempotency DO NOTHING`,
 			network, e.ID, e.ContractID, int64(e.LedgerSequence), e.ClosedAt,
 			e.TxHash, e.TxIndex, e.OpIndex, e.EventIndex, name,
-			topic(0), topic(1), topic(2), topic(3), e.Topics, e.ValueXDR, e.RawXDR,
+			topic(0), topic(1), topic(2), topic(3), jsonText(e.Topics), e.ValueXDR, e.RawXDR,
 		)
 	}
 	results := tx.SendBatch(ctx, batch)
@@ -170,4 +171,22 @@ func (s *Store) EventCountsByName(ctx context.Context, network, contractID strin
 		return nil, fmt.Errorf("store: count events: %w", err)
 	}
 	return out, nil
+}
+
+// jsonText serializes a value for a jsonb parameter EXPLICITLY. Under the
+// extended protocol pgx knows the target column is jsonb and encodes a Go
+// slice as JSON on its own; under the simple protocol (what a user must
+// select to sit behind a transaction-mode pooler without prepared-statement
+// support) it has no type information and sends a Go slice as a Postgres
+// array literal, which jsonb rejects. Sending the JSON text ourselves works
+// identically in both modes, so the choice of protocol stops being a
+// correctness question.
+func jsonText(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		// Topics are []string: Marshal cannot fail on them. Keep the
+		// signature total anyway rather than panic inside a batch.
+		return "[]"
+	}
+	return string(raw)
 }
