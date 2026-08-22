@@ -14,5 +14,11 @@ RUN CGO_ENABLED=0 go build -trimpath \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/sierpe /sierpe
 EXPOSE 8080
+# The probe is the binary itself: distroless has no shell or curl, and the
+# platforms that run health checks inside the container (Docker, Swarm,
+# Coolify, Dokploy, CapRover, NAS UIs) would otherwise mark it unhealthy
+# forever. Kubernetes and cloud load balancers ignore this and probe /health
+# over the network, which is also fine.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["/sierpe", "healthcheck"]
 ENTRYPOINT ["/sierpe"]
 CMD ["run"]

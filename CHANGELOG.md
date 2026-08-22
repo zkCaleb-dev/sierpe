@@ -6,6 +6,23 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sierpe healthcheck`: probes the local `/health` endpoint and exits
+  0 or 1, and both images now declare it as their `HEALTHCHECK`. The
+  image is distroless — no shell, no curl — so every platform that runs
+  health checks inside the container (Docker, Swarm, Coolify, Dokploy,
+  CapRover, NAS container managers) marked Sierpe unhealthy forever and,
+  on some of them, refused to route traffic to it. Kubernetes and cloud
+  load balancers probe over the network and are unaffected.
+- When the process dies with the signature of a transaction-mode
+  connection pooler that lacks prepared-statement support (SQLSTATE
+  26000 or 42P05), the final log line now carries the one-parameter fix
+  (`default_query_exec_mode=simple_protocol`) instead of leaving the
+  operator to discover pgx internals. Found while mapping which Postgres
+  providers Sierpe works against: Supabase's transaction pooler, older
+  PgBouncer and several managed pools all fail exactly this way.
+
 ### Fixed
 
 - Sierpe did not work under pgx's simple protocol, which is what a user
