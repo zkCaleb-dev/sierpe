@@ -1,5 +1,9 @@
 # Railway template — maintainer runbook
 
+**Published template**: `https://railway.com/deploy/pk6tCs` (created
+2026-08-22 from the dashboard; referral code `tuEgvN` is the maintainer's
+and is optional on the link). Edit it at Workspace → Templates → Sierpe.
+
 The template is the one-click front door (DESIGN §11). Railway templates
 are created and edited in the dashboard (there is no CLI/API path), so
 this runbook records every field, so any maintainer can create or update
@@ -14,8 +18,12 @@ Two services:
 | Field | Value |
 |---|---|
 | Source | Docker Image: `ghcr.io/zkcaleb-dev/sierpe:v1.5.2` |
+| Service name | `sierpe` (it is the private hostname, `sierpe.railway.internal`) |
+| Service icon | `https://sierpe-web.vercel.app/favicon.svg` |
 | Healthcheck path | `/health` |
-| Public networking | enabled, port `8080` |
+| Public networking | HTTP proxy on port `8080` |
+| Restart policy | On failure, 10 retries (default) |
+| Replicas | 1 |
 
 Pin a version tag, never `latest`: a template deploy must be
 reproducible, and users redeploy at unpredictable times. Bump the pin as
@@ -29,6 +37,12 @@ Variables:
 | `NETWORK` | `testnet` | user-editable at deploy time; describe as "testnet or mainnet (mainnet also needs RPC_URLS)" |
 | `ADMIN_TOKEN` | `${{secret(48)}}` | generated per deployment; gates registrations |
 | `HTTP_BASIC_AUTH` | `sierpe:${{secret(24)}}` | generated per deployment; the whole surface (UI included) requires these credentials, so a fresh instance is private from minute zero |
+| `HTTP_PORT` | `8080` | explicit, so the listener can never drift from the proxy port |
+
+Every variable carries a description (the template guidelines require
+it); the template settings use the name `Sierpe`, the site favicon as icon
+and the 75-character description "Self-hosted Stellar indexer: register
+a contract, get its full history."
 
 ### Service 2: `Postgres`
 
