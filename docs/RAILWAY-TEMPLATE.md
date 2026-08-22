@@ -13,7 +13,7 @@ Two services:
 
 | Field | Value |
 |---|---|
-| Source | Docker Image: `ghcr.io/zkcaleb-dev/sierpe:v1.5.1` |
+| Source | Docker Image: `ghcr.io/zkcaleb-dev/sierpe:v1.5.2` |
 | Healthcheck path | `/health` |
 | Public networking | enabled, port `8080` |
 
