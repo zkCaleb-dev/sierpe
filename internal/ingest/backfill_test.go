@@ -9,17 +9,21 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 
+	"github.com/zkCaleb-dev/sierpe/internal/extract"
 	"github.com/zkCaleb-dev/sierpe/internal/source"
 	"github.com/zkCaleb-dev/sierpe/internal/store"
 )
 
 // fakeChunkChain serves hash-linked, transaction-free ledgers between
-// oldest and tip; requests below oldest classify as below-retention.
+// oldest and tip; requests below oldest classify as below-retention. It
+// counts batch calls so tests can assert how often a range was fetched.
 type fakeChunkChain struct {
 	oldest, tip uint32
+	calls       int
 }
 
 func (f *fakeChunkChain) GetLedgerBatch(_ context.Context, start uint32, limit int) ([]xdr.LedgerCloseMeta, error) {
+	f.calls++
 	if start < f.oldest {
 		return nil, fmt.Errorf("ledger %d below oldest %d: %w", start, f.oldest, source.ErrBelowRetention)
 	}
@@ -55,12 +59,13 @@ func (f *fakeChunkChain) GetLedgerBatch(_ context.Context, start uint32, limit i
 }
 
 // fakeBackfillStore keeps backfill rows in memory and records the order of
-// gap and chunk writes.
+// gap and chunk writes. failCommits injects per-contract commit failures.
 type fakeBackfillStore struct {
-	mu    sync.Mutex
-	jobs  map[string]store.BackfillJob
-	gaps  []string
-	order []string // "gap:..." / "chunk:contract:nextTo:done"
+	mu          sync.Mutex
+	jobs        map[string]store.BackfillJob
+	gaps        []string
+	order       []string // "gap:..." / "chunk:contract:nextTo:done"
+	failCommits map[string]int
 }
 
 func newFakeBackfillStore(jobs ...store.BackfillJob) *fakeBackfillStore {
@@ -86,6 +91,10 @@ func (f *fakeBackfillStore) ListPendingBackfills(context.Context, string) ([]sto
 func (f *fakeBackfillStore) CommitBackfillChunk(_ context.Context, _ string, b store.Backfill, _ []store.Event, _ []store.StateChange, _ []store.Transfer, _ []store.TrustlineChange, _ []store.Movement) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failCommits[b.ContractID] > 0 {
+		f.failCommits[b.ContractID]--
+		return fmt.Errorf("injected commit failure for %s", b.ContractID)
+	}
 	j := f.jobs[b.ContractID]
 	j.Backfill = b
 	f.jobs[b.ContractID] = j
@@ -125,6 +134,9 @@ func newTestBackfiller(src chunkSource, st backfillStore) *Backfiller {
 func (nopInstruments) IncBackfillChunks()     {}
 func (nopInstruments) AddBackfillLedgers(int) {}
 
+// Chunks sit on an absolute 2000-ledger grid: a walk anchored at 5000
+// first takes the partial cell [4001..5000], then full cells down to the
+// target.
 func TestBackfillWalksDescendingChunksToTarget(t *testing.T) {
 	src := &fakeChunkChain{oldest: 1, tip: 5000}
 	st := newFakeBackfillStore(job("CAAA", 1, 5000))
@@ -139,7 +151,7 @@ func TestBackfillWalksDescendingChunksToTarget(t *testing.T) {
 	if !bf.Done {
 		t.Errorf("backfill not done after 3 chunks: %+v", bf)
 	}
-	want := []string{"chunk:CAAA:3000:false", "chunk:CAAA:1000:false", "chunk:CAAA:0:true"}
+	want := []string{"chunk:CAAA:4000:false", "chunk:CAAA:2000:false", "chunk:CAAA:0:true"}
 	if len(st.order) != 3 {
 		t.Fatalf("commits = %v", st.order)
 	}
@@ -154,15 +166,18 @@ func TestBackfillWalksDescendingChunksToTarget(t *testing.T) {
 }
 
 func TestBackfillClampsAtRetentionWall(t *testing.T) {
-	// The wall (oldest=1200) falls inside the chunk [1001..3000]: the
-	// unserved remainder [1..1199] must become one gap, and the servable
-	// tail [1200..3000] must still be scanned before the clamp commits.
+	// The wall (oldest=1200) falls inside the grid cell [1..2000]: the
+	// first round walks the servable cell [2001..3000]; the second hits
+	// retention, records the unserved remainder [1..1199] as one gap, and
+	// still scans the servable tail [1200..2000] before the clamp commits.
 	src := &fakeChunkChain{oldest: 1200, tip: 5000}
 	st := newFakeBackfillStore(job("CAAA", 1, 3000))
 	b := newTestBackfiller(src, st)
 
-	if !b.round(context.Background()) {
-		t.Fatal("round did no work")
+	for i := 0; i < 2; i++ {
+		if !b.round(context.Background()) {
+			t.Fatalf("round %d did no work", i)
+		}
 	}
 	bf := st.backfill("CAAA")
 	if !bf.Done {
@@ -178,8 +193,8 @@ func TestBackfillClampsAtRetentionWall(t *testing.T) {
 		t.Errorf("gaps = %v, want exactly gap:1:1199", st.gaps)
 	}
 	// P7: the gap must be persisted before the clamped chunk commits.
-	if len(st.order) < 2 || st.order[0] != "gap:1:1199" {
-		t.Errorf("write order = %v, want the gap first", st.order)
+	if len(st.order) != 3 || st.order[1] != "gap:1:1199" {
+		t.Errorf("write order = %v, want the gap before the clamped commit", st.order)
 	}
 }
 
@@ -214,8 +229,123 @@ func TestBackfillResumesFromWatermark(t *testing.T) {
 		t.Fatal("resumed round did no work")
 	}
 	bf := st.backfill("CAAA")
-	if bf.NextTo != 1000 {
-		t.Errorf("next_to after resume = %d, want 1000", bf.NextTo)
+	if bf.NextTo != 2000 {
+		t.Errorf("next_to after resume = %d, want 2000", bf.NextTo)
+	}
+}
+
+// Two contracts whose next chunk sits in the same grid cell share one
+// scan: the range is fetched once, both watermarks land on the cell floor.
+func TestBackfillGroupSharesOneScan(t *testing.T) {
+	src := &fakeChunkChain{oldest: 1, tip: 5000}
+	st := newFakeBackfillStore(job("CAAA", 1, 5000), job("CBBB", 1, 5000))
+	b := newTestBackfiller(src, st)
+
+	if !b.round(context.Background()) {
+		t.Fatal("round did no work")
+	}
+	// The partial cell [4001..5000] is 1000 ledgers = 5 batches of 200,
+	// fetched once for the whole group — not once per contract.
+	if src.calls != 5 {
+		t.Errorf("source batch calls = %d, want 5 (one shared scan)", src.calls)
+	}
+	for _, id := range []string{"CAAA", "CBBB"} {
+		if bf := st.backfill(id); bf.NextTo != 4000 {
+			t.Errorf("%s next_to = %d, want 4000", id, bf.NextTo)
+		}
+	}
+}
+
+// Registration anchors carry a few ledgers of jitter (each anchors at the
+// cursor of its own registration instant). Walks anchored in the same grid
+// cell must converge into one group on the very first chunk — exact-range
+// grouping kept them one round apart forever, scanning every cell twice.
+// Found live on the first smoke of this feature.
+func TestBackfillStaggeredAnchorsConvergeInTheFirstCell(t *testing.T) {
+	src := &fakeChunkChain{oldest: 1, tip: 5000}
+	st := newFakeBackfillStore(job("CAAA", 1, 4993), job("CBBB", 1, 4997))
+	b := newTestBackfiller(src, st)
+
+	if !b.round(context.Background()) {
+		t.Fatal("round did no work")
+	}
+	// One scan of [4001..4997] (the cell floor up to the highest member):
+	// ceil(997/200) = 5 batches, once for both.
+	if src.calls != 5 {
+		t.Errorf("source batch calls = %d, want 5 (staggered anchors must share the cell scan)", src.calls)
+	}
+	for _, id := range []string{"CAAA", "CBBB"} {
+		if bf := st.backfill(id); bf.NextTo != 4000 {
+			t.Errorf("%s next_to = %d, want 4000 (landed together on the cell floor)", id, bf.NextTo)
+		}
+	}
+	// From here on they are in lockstep: the next round is one shared scan.
+	calls := src.calls
+	if !b.round(context.Background()) {
+		t.Fatal("second round did no work")
+	}
+	if got := src.calls - calls; got != 10 {
+		t.Errorf("second-round batch calls = %d, want 10 (one scan of [2001..4000])", got)
+	}
+}
+
+// A commit failure isolates to its contract: the rest of the group keeps
+// its progress, and the trailing contract retries through the scan cache
+// without downloading the range a second time.
+func TestBackfillCommitFailureIsolatesAndTrailsOnTheCache(t *testing.T) {
+	src := &fakeChunkChain{oldest: 1, tip: 5000}
+	st := newFakeBackfillStore(job("CAAA", 1, 5000), job("CBBB", 1, 5000))
+	st.failCommits = map[string]int{"CBBB": 1}
+	b := newTestBackfiller(src, st)
+
+	if !b.round(context.Background()) {
+		t.Fatal("first round did no work")
+	}
+	if bf := st.backfill("CAAA"); bf.NextTo != 4000 {
+		t.Errorf("CAAA next_to = %d, want 4000 (unaffected by the peer failure)", bf.NextTo)
+	}
+	if bf := st.backfill("CBBB"); bf.NextTo != 5000 {
+		t.Errorf("CBBB next_to = %d, want 5000 (failed commit keeps the watermark)", bf.NextTo)
+	}
+	afterFirst := src.calls
+
+	if !b.round(context.Background()) {
+		t.Fatal("second round did no work")
+	}
+	if bf := st.backfill("CBBB"); bf.NextTo != 4000 {
+		t.Errorf("CBBB next_to = %d, want 4000 (retried alone)", bf.NextTo)
+	}
+	if bf := st.backfill("CAAA"); bf.NextTo != 2000 {
+		t.Errorf("CAAA next_to = %d, want 2000 (kept walking)", bf.NextTo)
+	}
+	// CBBB's retry of [4001..5000] must ride the cache: only CAAA's next
+	// cell [2001..4000] (10 batches) may hit the source.
+	if got := src.calls - afterFirst; got != 10 {
+		t.Errorf("second-round batch calls = %d, want 10 (trailer must not re-download)", got)
+	}
+}
+
+// A shared scan's rows split by the contract each row belongs to; a group
+// member with no rows in the chunk gets an empty partition, never a nil.
+func TestPartitionResultSplitsByContract(t *testing.T) {
+	res := extract.Result{
+		Events: []store.Event{
+			{ID: "e1", ContractID: "CAAA"},
+			{ID: "e2", ContractID: "CBBB"},
+			{ID: "e3", ContractID: "CAAA"},
+		},
+		Movements:    []store.Movement{{TransferID: "m1", ContractID: "CBBB"}},
+		StateChanges: []store.StateChange{{ID: "s1", ContractID: "CAAA"}},
+	}
+	parts := partitionResult(res)
+	if p := parts["CAAA"].orEmpty(); len(p.events) != 2 || len(p.states) != 1 || len(p.movements) != 0 {
+		t.Errorf("CAAA partition = %d events, %d states, %d movements", len(p.events), len(p.states), len(p.movements))
+	}
+	if p := parts["CBBB"].orEmpty(); len(p.events) != 1 || len(p.movements) != 1 {
+		t.Errorf("CBBB partition = %d events, %d movements", len(p.events), len(p.movements))
+	}
+	if p := parts["CNONE"].orEmpty(); p == nil || len(p.events) != 0 {
+		t.Errorf("a contract with no rows must get an empty partition, got %+v", p)
 	}
 }
 
@@ -292,13 +422,19 @@ func TestBackfillAnchoredPastTheTipWaitsInsteadOfFailing(t *testing.T) {
 	}
 
 	// The tip catches up: the same job now completes with no intervention.
+	// The grid puts the anchor cell at [4001..5000] and the target cuts the
+	// final cell to the single ledger 4000, so the walk takes two commits.
 	src.tip = 5000
 	if !b.round(context.Background()) {
 		t.Fatal("the walk did not resume once the anchor closed")
 	}
-	// The span (4000..5000) is under one chunk, so the walk finishes it in
-	// a single commit and lands the watermark just below the target.
+	if bf := st.backfill("CAAA"); bf.NextTo != 4000 || bf.Done {
+		t.Errorf("backfill after the anchor cell = %+v, want next_to 4000 and not done", bf)
+	}
+	if !b.round(context.Background()) {
+		t.Fatal("the final cell did not land")
+	}
 	if bf := st.backfill("CAAA"); bf.NextTo != 3999 || !bf.Done {
-		t.Errorf("backfill = %+v, want the chunk landed and the walk done", bf)
+		t.Errorf("backfill = %+v, want the walk done just below the target", bf)
 	}
 }
