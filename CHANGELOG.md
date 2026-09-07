@@ -6,6 +6,16 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The events cursor now carries and enforces its kind. Every other
+  endpoint stamped its cursors, but `/events` — the oldest codec — never
+  did, so a cursor minted by a different endpoint whose fields happened
+  to unmarshal was accepted (found live: a movements cursor paged
+  `/events` with a 200). New events cursors carry `kind: events`; a
+  foreign kind is rejected with 400; cursors minted before the stamp
+  carry no kind and remain valid, so nothing in the wild breaks.
+
 ### Changed
 
 - New gaps are trimmed against the open ones below them, and a resolving

@@ -14,7 +14,13 @@ import (
 // stellar#1872 cursor philosophy). Network and contract are included so a
 // cursor cannot be replayed against a different dataset.
 type cursorPayload struct {
-	V          int        `json:"v"`
+	V int `json:"v"`
+	// Kind was absent until 1.7.x: every other endpoint stamped its kind
+	// but events never did, so a foreign cursor whose fields happened to
+	// unmarshal here was accepted (found live: a movements cursor walked
+	// /events). New cursors carry it; an EMPTY kind stays valid so cursors
+	// minted before the stamp keep working — only a FOREIGN kind rejects.
+	Kind       string     `json:"k,omitempty"`
 	Network    string     `json:"n"`
 	ContractID string     `json:"c"`
 	Topics     [4]*string `json:"t"`
@@ -41,6 +47,7 @@ func validateCursorLimit(limit int) error {
 func encodeCursor(network string, q store.EventQuery, afterID string) string {
 	payload := cursorPayload{
 		V:          cursorVersion,
+		Kind:       kindEvents,
 		Network:    network,
 		ContractID: q.ContractID,
 		Topics:     q.Topics,
@@ -57,6 +64,7 @@ func encodeCursor(network string, q store.EventQuery, afterID string) string {
 // history cursor resumes a change-id walk. Encoded in the payload so a
 // cursor can never be replayed against the wrong endpoint.
 const (
+	kindEvents           = "events"
 	kindSnapshot         = "state"
 	kindHistory          = "state_history"
 	kindTransfers        = "transfers"
@@ -343,6 +351,9 @@ func decodeCursor(network, contractID, cursor string) (store.EventQuery, error) 
 	}
 	if p.V != cursorVersion {
 		return store.EventQuery{}, fmt.Errorf("cursor version %d is not supported", p.V)
+	}
+	if p.Kind != "" && p.Kind != kindEvents {
+		return store.EventQuery{}, fmt.Errorf("cursor belongs to a different endpoint")
 	}
 	if p.Network != network || p.ContractID != contractID {
 		return store.EventQuery{}, fmt.Errorf("cursor belongs to a different contract or network")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -243,6 +244,32 @@ func TestEventsCursorRejectsForeignCursor(t *testing.T) {
 	}
 	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/events?cursor=not-a-cursor", nil); code != 400 {
 		t.Errorf("status = %d, want 400: garbage cursor", code)
+	}
+}
+
+// The events decoder was the one decoder that never checked kind, so a
+// cursor from any OTHER endpoint whose fields happened to unmarshal was
+// accepted (found live: a movements cursor walked /events with a 200).
+// Kind-less cursors minted before the stamp must keep working.
+func TestEventsCursorIsEndpointBound(t *testing.T) {
+	ev := &fakeEventReader{cursor: store.Cursor{Sequence: 6000}}
+	srv := newTestAPI(ev, defaultContractReader())
+	defer srv.Close()
+
+	foreign := encodeMovementsCursor("testnet", store.MovementQuery{ContractID: registered, FromLedger: 1, Limit: 10})
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/events?cursor="+foreign, nil); code != 400 {
+		t.Errorf("a movements cursor must not work on /events: status = %d", code)
+	}
+
+	// A pre-1.7.x events cursor carries no kind at all; it stays valid.
+	legacy := cursorPayload{
+		V: cursorVersion, Network: "testnet", ContractID: registered,
+		FromLedger: 1, Limit: 10, AfterID: "0000000000000000001-0000000000",
+	}
+	raw, _ := json.Marshal(legacy)
+	kindless := base64.RawURLEncoding.EncodeToString(raw)
+	if code := getJSON(t, srv.URL+"/v1/contracts/"+registered+"/events?cursor="+kindless, nil); code != 200 {
+		t.Errorf("a kind-less legacy events cursor must stay valid: status = %d", code)
 	}
 }
 
