@@ -21,8 +21,8 @@ metric does not ship without a row here (CLAUDE.md verification rules).
 | `sierpe_suppressed_events_total` | counter | Events dropped because their XDR could not be re-encoded. | **Alert if nonzero** — same semantics. |
 | `sierpe_suppressed_transfers_total` | counter | Events that named a token movement but did not decode as one; the raw event row still lands. | **Alert if nonzero** — the decoder no longer matches what the network emits. |
 | `sierpe_suppressed_trustlines_total` | counter | Watched trustline changes that could not be read. | **Alert if nonzero** — counted data loss. |
-| `sierpe_backfill_chunks_total` | counter | Backfill chunks committed since process start. | Stalls while `sierpe_backfill_pending` > 0 = stuck worker. |
-| `sierpe_backfill_ledgers_scanned_total` | counter | Ledgers covered by committed backfill chunks. | Progress rate of history walks. |
+| `sierpe_backfill_chunks_total` | counter | Backfill chunk scans performed since process start. A chunk shared by several contracts (same grid range) counts once — the scan happened once; a cache-served retry counts zero. | Stalls while `sierpe_backfill_pending` > 0 = stuck worker. |
+| `sierpe_backfill_ledgers_scanned_total` | counter | Ledgers actually fetched and scanned by backfill chunks. Shared scans count their ledgers once, no matter how many contracts they served. | Progress rate of history walks (in scanned ledgers, not contract-ledgers). |
 | `sierpe_backfill_pending` | gauge | Registered contracts whose backfill has not finished. | Should drain to 0 after registrations. |
 | `sierpe_gaps_healed_total` | counter | Gaps fully healed from the history archives. | Progress signal for the archive leg. |
 | `sierpe_healed_ledgers_total` | counter | Ledgers replayed from the archives and committed by heals. | Heal throughput. |

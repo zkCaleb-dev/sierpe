@@ -6,6 +6,22 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Backfill walks now share their scans. Chunks sit on an absolute
+  2000-ledger grid, and contracts whose next chunk is the same range form
+  a group whose ledgers are fetched and extracted once — each contract
+  still commits its own rows and watermark atomically, so a failed commit
+  isolates to its contract while the rest keep their progress; the
+  trailing contract retries through a one-entry scan cache instead of
+  re-downloading the range. A contract walking alone is a group of one
+  and behaves as before. This is what makes registering many contracts at
+  once affordable: N same-range registrations previously cost N copies of
+  every RPC download. `sierpe_backfill_chunks_total` and
+  `sierpe_backfill_ledgers_scanned_total` now count scans actually
+  performed (once per shared chunk), which is what they always claimed to
+  measure.
+
 ## [1.6.0] - 2026-09-07
 
 ### Added

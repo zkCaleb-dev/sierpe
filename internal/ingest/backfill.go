@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/stellar/go-stellar-sdk/xdr"
@@ -57,10 +59,13 @@ type backfillInstruments interface {
 	IncForeignUndecodable(n int)
 }
 
-// Backfiller walks every registered contract's history downward in chunks,
-// oldest progress first, one chunk per contract per round. Chunks commit
-// atomically (events + watermark); the retention wall clamps the walk with
-// one honest gap instead of a silent stop (KNOWLEDGE.md P7, Umbra 4).
+// Backfiller walks every registered contract's history downward in chunks
+// aligned to an absolute grid, sharing one scan among the contracts whose
+// next chunk is the same range. Each contract still commits its own rows
+// and watermark atomically, so a group is a scheduling fact, never a unit
+// of failure. Chunks commit atomically (events + watermark); the retention
+// wall clamps the walk with one honest gap instead of a silent stop
+// (KNOWLEDGE.md P7, Umbra 4).
 type Backfiller struct {
 	network    string
 	passphrase string
@@ -68,6 +73,27 @@ type Backfiller struct {
 	store      backfillStore
 	inst       backfillInstruments
 	log        *slog.Logger
+	// lastScan remembers the one most recent successful scan. A contract
+	// whose commit failed trails its group by exactly one grid cell, so
+	// every range it asks for next is the range the group scanned last
+	// round: the cache turns a split group's trailing walk into zero extra
+	// downloads instead of a permanent second copy of the window.
+	lastScan *scanCacheEntry
+}
+
+// scanCacheEntry is one cached scan: the range, the members it extracted
+// for (id plus kinds, so a reconciled registration never reuses rows
+// derived under different kinds), and the result.
+type scanCacheEntry struct {
+	from, to uint32
+	members  map[string]string // contract id -> canonical kinds
+	res      extract.Result
+}
+
+// chunkRange is one grid-aligned scan range; jobs needing the same range
+// form one group.
+type chunkRange struct {
+	from, to uint32
 }
 
 // NewBackfiller wires a Backfiller. All collaborators are required.
@@ -91,8 +117,11 @@ func (b *Backfiller) Run(ctx context.Context) {
 	}
 }
 
-// round processes at most one chunk per pending contract and reports
-// whether any work happened.
+// round groups the pending contracts by the exact grid chunk each needs
+// next and processes one chunk per group: the range is fetched and
+// extracted once for everybody in it, and each contract commits its own
+// rows and watermark. A contract walking alone is a group of one — the
+// ordinary case — and behaves exactly like a private walk.
 func (b *Backfiller) round(ctx context.Context) bool {
 	jobs, err := b.store.ListPendingBackfills(ctx, b.network)
 	if err != nil {
@@ -102,119 +131,294 @@ func (b *Backfiller) round(ctx context.Context) bool {
 		return false
 	}
 	worked := false
+	// Jobs group by the grid cell of their next chunk (its aligned floor),
+	// NOT by exact range: registration anchors carry a few ledgers of
+	// jitter, so exact-range grouping would keep same-cell walks one round
+	// apart forever. The group scans up to the highest member watermark and
+	// everybody lands on the cell floor together; the few ledgers a lower
+	// member re-covers are the registration anchor margin, already
+	// idempotent by design.
+	groups := map[uint32][]store.BackfillJob{}
+	tops := map[uint32]uint32{}
+	var order []uint32
 	for _, job := range jobs {
+		bf := job.Backfill
+		if bf.NextTo < bf.TargetFrom {
+			// Done at birth: the anchor already sits below the target.
+			next := bf
+			next.Done = true
+			if err := b.store.CommitBackfillChunk(ctx, b.network, next, nil, nil, nil, nil, nil); err != nil {
+				b.log.Warn("backfill: closing an empty walk failed, will retry",
+					"contract_id", job.Contract.ContractID, "err", err)
+				continue
+			}
+			worked = true
+			continue
+		}
+		from := chunkFromFor(bf)
+		if _, seen := groups[from]; !seen {
+			order = append(order, from)
+		}
+		groups[from] = append(groups[from], job)
+		tops[from] = max(tops[from], bf.NextTo)
+	}
+	// Highest cell first: a walk trailing another by one grid cell asks
+	// for the range scanned immediately before it, keeping the scan cache
+	// a guaranteed hit.
+	sort.Slice(order, func(i, j int) bool { return order[i] > order[j] })
+	for _, from := range order {
 		if ctx.Err() != nil {
 			return worked
 		}
-		if err := b.processChunk(ctx, job); err != nil {
-			switch {
-			case ctx.Err() != nil:
-			case errors.Is(err, source.ErrNotYetAvailable):
-				// EXPECTED, not a failure: a fresh registration anchors its
-				// walk a margin past the live cursor so the ledgers closing
-				// during the registry reload belong to somebody. Those
-				// ledgers have not closed yet, so the first chunk asks for
-				// the future and the source rightly says no. It resolves
-				// itself as the tip advances; calling it a failure trains
-				// the operator to ignore the log line that means something.
-				b.log.Info("backfill: waiting for the registration anchor to close",
-					"contract_id", job.Contract.ContractID, "anchor", job.Backfill.NextTo)
-			default:
-				b.log.Warn("backfill: chunk failed, will retry",
-					"contract_id", job.Contract.ContractID, "err", err)
-			}
-			continue
+		if b.processGroup(ctx, chunkRange{from: from, to: tops[from]}, groups[from]) {
+			worked = true
 		}
-		worked = true
 	}
 	return worked
 }
 
-// processChunk walks one chunk [chunkFrom .. next_to] for one contract and
-// commits its events plus the moved watermark in one transaction. When the
-// retention wall cuts into the chunk, the unserved remainder becomes one
-// persisted gap BEFORE the servable part is processed (gap first, then the
-// work — P7), and the backfill closes clamped.
-func (b *Backfiller) processChunk(ctx context.Context, job store.BackfillJob) error {
-	bf := job.Backfill
-	if bf.NextTo < bf.TargetFrom {
-		next := bf
-		next.Done = true
-		return b.store.CommitBackfillChunk(ctx, b.network, next, nil, nil, nil, nil, nil)
-	}
-	chunkFrom := bf.TargetFrom
-	if span := bf.NextTo - bf.TargetFrom; span >= backfillChunkSize {
-		chunkFrom = bf.NextTo - backfillChunkSize + 1
-	}
-	snap := registry.StaticSnapshot(job.Contract)
+// chunkFromFor aligns a walk's next chunk to the absolute chunk grid, so
+// contracts descending through the same region ask for identical ranges no
+// matter when each started — which is what makes their scans shareable.
+// The target floor still cuts the final chunk short.
+func chunkFromFor(bf store.Backfill) uint32 {
+	return max(bf.NextTo-(bf.NextTo-1)%backfillChunkSize, bf.TargetFrom)
+}
 
-	res, err := b.scan(ctx, snap, chunkFrom, bf.NextTo)
-	next := bf
-	switch {
-	case err == nil:
-		next.NextTo = chunkFrom - 1 // chunkFrom >= 1: ledger sequences start at 1
-		next.Done = chunkFrom <= bf.TargetFrom
+// processGroup scans one grid chunk once for every contract in the group
+// and commits each contract's rows and watermark separately. It reports
+// whether at least one contract advanced.
+func (b *Backfiller) processGroup(ctx context.Context, rng chunkRange, jobs []store.BackfillJob) bool {
+	contracts := make([]store.Contract, len(jobs))
+	for i, j := range jobs {
+		contracts[i] = j.Contract
+	}
 
-	case errors.Is(err, source.ErrBelowRetention):
-		// Retention only ever cuts from below: find the real wall by asking
-		// getLedgers itself (rule 9), never a health endpoint.
-		wall, werr := b.findWall(ctx, chunkFrom+1, bf.NextTo)
-		if werr != nil {
-			return fmt.Errorf("locating retention wall: %w", werr)
-		}
-		if err := b.store.RecordGap(ctx, b.network, bf.TargetFrom, wall-1,
-			"below source retention during backfill; the archive leg can heal this"); err != nil {
-			return err
-		}
-		next.Done = true
-		next.ClampedAt = &wall
-		if wall <= bf.NextTo {
-			res, err = b.scan(ctx, snap, wall, bf.NextTo)
-			if err != nil {
-				return fmt.Errorf("scanning above the wall: %w", err)
+	res, cached := b.cachedScan(rng, contracts)
+	var wall uint32
+	clamped := false
+	if !cached {
+		var err error
+		res, err = b.scan(ctx, registry.StaticSnapshot(contracts...), rng.from, rng.to)
+		switch {
+		case err == nil:
+			b.rememberScan(rng, contracts, res)
+
+		case errors.Is(err, source.ErrNotYetAvailable):
+			// EXPECTED, not a failure: a fresh registration anchors its walk
+			// a margin past the live cursor so the ledgers closing during
+			// the registry reload belong to somebody. Those ledgers have not
+			// closed yet, so the chunk asks for the future and the source
+			// rightly says no. It resolves itself as the tip advances;
+			// calling it a failure trains the operator to ignore the log
+			// line that means something.
+			b.log.Info("backfill: waiting for the registration anchor to close",
+				"contracts", len(jobs), "anchor", rng.to)
+			return false
+
+		case errors.Is(err, source.ErrBelowRetention):
+			// Retention only ever cuts from below: find the real wall by
+			// asking getLedgers itself (rule 9), never a health endpoint.
+			w, werr := b.findWall(ctx, rng.from+1, rng.to)
+			if werr != nil {
+				b.log.Warn("backfill: locating retention wall failed, will retry", "err", werr)
+				return false
 			}
-			next.NextTo = wall - 1
+			wall, clamped = w, true
+			// One gap per distinct target; identical targets collapse into
+			// one row through the deterministic gap id. Gaps land BEFORE any
+			// clamped chunk commits (gap first, then the work — P7).
+			recorded := map[uint32]bool{}
+			for _, job := range jobs {
+				tf := job.Backfill.TargetFrom
+				if recorded[tf] {
+					continue
+				}
+				if err := b.store.RecordGap(ctx, b.network, tf, wall-1,
+					"below source retention during backfill; the archive leg can heal this"); err != nil {
+					b.log.Warn("backfill: recording gap failed, will retry", "err", err)
+					return false
+				}
+				recorded[tf] = true
+			}
+			res = extract.Result{}
+			if wall <= rng.to {
+				res, err = b.scan(ctx, registry.StaticSnapshot(contracts...), wall, rng.to)
+				if err != nil {
+					b.log.Warn("backfill: scanning above the wall failed, will retry", "err", err)
+					return false
+				}
+			}
+			b.log.Warn("backfill: clamped at retention wall",
+				"contracts", len(jobs), "unserved_to", wall-1, "covered_from", wall)
+
+		default:
+			if ctx.Err() == nil {
+				b.log.Warn("backfill: chunk failed, will retry",
+					"contracts", len(jobs), "from", rng.from, "to", rng.to, "err", err)
+			}
+			return false
 		}
-		b.log.Warn("backfill: clamped at retention wall",
-			"contract_id", job.Contract.ContractID,
-			"unserved_from", bf.TargetFrom, "unserved_to", wall-1, "covered_from", wall)
-
-	default:
-		return err
 	}
 
-	if err := b.store.CommitBackfillChunk(ctx, b.network, next,
-		res.Events, res.StateChanges, res.Transfers, res.TrustlineChanges, res.Movements); err != nil {
-		return err
+	parts := partitionResult(res)
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].Contract.ContractID < jobs[j].Contract.ContractID
+	})
+	committed := 0
+	for _, job := range jobs {
+		bf := job.Backfill
+		next := bf
+		if clamped {
+			w := wall
+			next.Done = true
+			next.ClampedAt = &w
+			if wall <= bf.NextTo {
+				next.NextTo = wall - 1
+			}
+		} else {
+			next.NextTo = rng.from - 1 // rng.from >= 1: ledger sequences start at 1
+			next.Done = rng.from <= bf.TargetFrom
+		}
+		p := parts[job.Contract.ContractID].orEmpty()
+		if err := b.store.CommitBackfillChunk(ctx, b.network, next,
+			p.events, p.states, p.transfers, p.trustlines, p.movements); err != nil {
+			// The rest of the group keeps its progress; this contract
+			// retries alone next round and rides the scan cache while it
+			// trails.
+			b.log.Warn("backfill: chunk commit failed, will retry",
+				"contract_id", job.Contract.ContractID, "err", err)
+			continue
+		}
+		committed++
+	}
+	if committed == 0 {
+		return false
 	}
 
-	b.inst.IncBackfillChunks()
-	b.inst.AddBackfillLedgers(int(bf.NextTo) - int(next.NextTo))
-	b.inst.IncEventsExtracted(len(res.Events))
-	b.inst.IncStateChangesExtracted(len(res.StateChanges))
-	b.inst.IncTransfersExtracted(len(res.Transfers))
-	b.inst.IncTrustlineChangesExtracted(len(res.TrustlineChanges))
-	b.inst.IncMovementsExtracted(len(res.Movements))
-	b.inst.IncFailedTxs(res.FailedTxs)
-	b.inst.IncSuppressedTxs(res.SuppressedTxs)
-	b.inst.IncSuppressedEvents(res.SuppressedEvents)
-	b.inst.IncSuppressedTransfers(res.SuppressedTransfers)
-	b.inst.IncSuppressedTrustlines(res.SuppressedTrustlines)
-	b.inst.IncForeignUndecodable(res.ForeignUndecodable)
-	if res.SuppressedTxs > 0 || res.SuppressedEvents > 0 || res.SuppressedTransfers > 0 || res.SuppressedTrustlines > 0 {
-		b.log.Warn("backfill: suppressed unreadable chain data",
-			"contract_id", job.Contract.ContractID,
-			"txs", res.SuppressedTxs, "events", res.SuppressedEvents,
-			"transfers", res.SuppressedTransfers, "trustlines", res.SuppressedTrustlines)
+	// The scan happened once (or not at all, on a cache hit), no matter how
+	// many contracts shared it — the instruments say what actually ran.
+	if !cached {
+		b.inst.IncBackfillChunks()
+		scanned := int(rng.to) - int(rng.from) + 1
+		if clamped {
+			scanned = 0
+			if wall <= rng.to {
+				scanned = int(rng.to) - int(wall) + 1
+			}
+		}
+		b.inst.AddBackfillLedgers(scanned)
+		b.inst.IncEventsExtracted(len(res.Events))
+		b.inst.IncStateChangesExtracted(len(res.StateChanges))
+		b.inst.IncTransfersExtracted(len(res.Transfers))
+		b.inst.IncTrustlineChangesExtracted(len(res.TrustlineChanges))
+		b.inst.IncMovementsExtracted(len(res.Movements))
+		b.inst.IncFailedTxs(res.FailedTxs)
+		b.inst.IncSuppressedTxs(res.SuppressedTxs)
+		b.inst.IncSuppressedEvents(res.SuppressedEvents)
+		b.inst.IncSuppressedTransfers(res.SuppressedTransfers)
+		b.inst.IncSuppressedTrustlines(res.SuppressedTrustlines)
+		b.inst.IncForeignUndecodable(res.ForeignUndecodable)
+		if res.SuppressedTxs > 0 || res.SuppressedEvents > 0 || res.SuppressedTransfers > 0 || res.SuppressedTrustlines > 0 {
+			b.log.Warn("backfill: suppressed unreadable chain data",
+				"contracts", len(jobs),
+				"txs", res.SuppressedTxs, "events", res.SuppressedEvents,
+				"transfers", res.SuppressedTransfers, "trustlines", res.SuppressedTrustlines)
+		}
 	}
 	b.log.Info("backfill: chunk committed",
-		"contract_id", job.Contract.ContractID,
-		"from", next.NextTo+1, "to", bf.NextTo,
+		"contracts", committed, "of", len(jobs),
+		"from", rng.from, "to", rng.to,
 		"events", len(res.Events), "state_changes", len(res.StateChanges),
 		"transfers", len(res.Transfers), "trustlines", len(res.TrustlineChanges),
 		"movements", len(res.Movements),
-		"done", next.Done)
-	return nil
+		"cached", cached)
+	return true
+}
+
+// cachedScan returns the remembered result when the requested range is
+// exactly the last scanned one and every requesting contract was part of
+// that scan with the same kinds.
+func (b *Backfiller) cachedScan(rng chunkRange, contracts []store.Contract) (extract.Result, bool) {
+	c := b.lastScan
+	if c == nil || c.from != rng.from || c.to != rng.to {
+		return extract.Result{}, false
+	}
+	for _, ct := range contracts {
+		if c.members[ct.ContractID] != canonicalKinds(ct) {
+			return extract.Result{}, false
+		}
+	}
+	return c.res, true
+}
+
+// rememberScan stores the scan just performed as the one-entry cache.
+func (b *Backfiller) rememberScan(rng chunkRange, contracts []store.Contract, res extract.Result) {
+	members := make(map[string]string, len(contracts))
+	for _, ct := range contracts {
+		members[ct.ContractID] = canonicalKinds(ct)
+	}
+	b.lastScan = &scanCacheEntry{from: rng.from, to: rng.to, members: members, res: res}
+}
+
+// canonicalKinds fingerprints a registration's kinds order-independently.
+func canonicalKinds(c store.Contract) string {
+	kinds := append([]string(nil), c.Kinds...)
+	sort.Strings(kinds)
+	return strings.Join(kinds, ",")
+}
+
+// partitioned is one contract's slice of a shared scan.
+type partitioned struct {
+	events     []store.Event
+	states     []store.StateChange
+	transfers  []store.Transfer
+	trustlines []store.TrustlineChange
+	movements  []store.Movement
+}
+
+// partitionResult splits a shared scan's rows by the contract each row
+// belongs to; every row type carries its owning contract id.
+func partitionResult(res extract.Result) map[string]*partitioned {
+	parts := map[string]*partitioned{}
+	get := func(id string) *partitioned {
+		p := parts[id]
+		if p == nil {
+			p = &partitioned{}
+			parts[id] = p
+		}
+		return p
+	}
+	for _, e := range res.Events {
+		p := get(e.ContractID)
+		p.events = append(p.events, e)
+	}
+	for _, s := range res.StateChanges {
+		p := get(s.ContractID)
+		p.states = append(p.states, s)
+	}
+	for _, t := range res.Transfers {
+		p := get(t.ContractID)
+		p.transfers = append(p.transfers, t)
+	}
+	for _, tl := range res.TrustlineChanges {
+		p := get(tl.ContractID)
+		p.trustlines = append(p.trustlines, tl)
+	}
+	for _, m := range res.Movements {
+		p := get(m.ContractID)
+		p.movements = append(p.movements, m)
+	}
+	return parts
+}
+
+// orEmpty returns an empty partition for contracts with no rows in the
+// chunk, so commits never dereference a missing map entry.
+func (p *partitioned) orEmpty() *partitioned {
+	if p == nil {
+		return &partitioned{}
+	}
+	return p
 }
 
 // scan fetches and extracts ledgers [from .. to] ascending, verifying hash
@@ -225,10 +429,7 @@ func (b *Backfiller) scan(ctx context.Context, snap *registry.Snapshot, from, to
 
 	seq := from
 	for seq <= to {
-		limit := int(to-seq) + 1
-		if limit > backfillBatchLimit {
-			limit = backfillBatchLimit
-		}
+		limit := min(int(to-seq)+1, backfillBatchLimit)
 		batch, err := b.src.GetLedgerBatch(ctx, seq, limit)
 		if err != nil {
 			return acc, err
