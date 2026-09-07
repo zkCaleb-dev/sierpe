@@ -76,9 +76,12 @@ Hard rules:
   ids, SAC default) and `trustlines` (opt-in; asset hashed locally to its
   SAC, holder snapshot with tombstones), each with its own read endpoint
   and endpoint-bound cursors.
-- **GitHub Actions is locked** (billing) and the maintainer will not pay for it.
-  The real gate is LOCAL: gofmt, build, vet, `test -race` with a throwaway
-  Postgres, staticcheck. Goreleaser runs manually. Do not propose paying.
+- **GitHub Actions runs again** (billing unblocked, observed 2026-09-07): CI
+  runs build, vet, `test -race`, staticcheck, gosec and an unpinned
+  `govulncheck@latest` on every PR — so a stale toolchain fails CI even when
+  the diff is innocent. The gate is still run LOCALLY first: gofmt, build,
+  vet, `test -race` with a throwaway Postgres, staticcheck. Goreleaser runs
+  manually.
 - **v1.2.0 released (2026-08-20): the archive leg.** Recorded
   below-retention gaps heal from the public history archives through a
   captive stellar-core (`-full` image, linux/amd64), gated by a
