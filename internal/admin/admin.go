@@ -139,6 +139,9 @@ type contractResponse struct {
 	Kinds          []string        `json:"kinds"`
 	Classification json.RawMessage `json:"classification"`
 	RegisteredAt   time.Time       `json:"registered_at"`
+	// Warnings carries anything the registration accepted but could not
+	// verify — the registrant is remote, so a log line alone would hide it.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func toResponse(c store.Contract) contractResponse {
@@ -186,14 +189,30 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Classification happens before the row exists: a contract that is not
-	// on chain is a caller mistake, not a registration (D1 — kinds default
-	// follows what the chain says the contract is).
+	// Classification happens before the row exists (D1 — the kinds default
+	// follows what the chain says the contract is). A contract with no live
+	// instance is therefore only registrable with explicit kinds: without
+	// them there is nothing honest to default to. The RPC cannot distinguish
+	// an archived instance (TTL expired) from one that never existed, so the
+	// acceptance is stated as a warning on the response, not silently — and
+	// a wrong id costs nothing but an empty, honestly-covered history.
+	var warnings []string
 	cls, err := s.classifier.Classify(r.Context(), req.ContractID)
 	switch {
+	case errors.Is(err, registry.ErrContractNotFound) && len(req.Kinds) > 0:
+		cls = registry.Classification{
+			Type: registry.TypeUnknown, Events: []string{}, Method: registry.MethodOpaque,
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"contract %s has no live instance on %s (archived after TTL expiry, or never deployed); "+
+				"registered as type unknown with the kinds you supplied. History is still derived from "+
+				"whatever sources reach; re-register after a restore to classify it properly", req.ContractID, s.network))
+		s.log.Warn("registering contract with no live instance",
+			"contract_id", req.ContractID, "kinds", req.Kinds)
 	case errors.Is(err, registry.ErrContractNotFound):
 		writeError(w, http.StatusNotFound,
-			fmt.Sprintf("contract %s does not exist on %s", req.ContractID, s.network))
+			fmt.Sprintf("contract %s does not exist on %s; if it is archived (TTL expired), "+
+				"register it with explicit kinds to index its history anyway", req.ContractID, s.network))
 		return
 	case err != nil:
 		s.log.Error("classification failed", "contract_id", req.ContractID, "err", err)
@@ -261,7 +280,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("contract registered", "contract_id", saved.ContractID,
 		"kinds", saved.Kinds, "type", cls.Type, "method", cls.Method,
 		"events", len(cls.Events), "backfill_from", targetFrom, "backfill_to", nextTo)
-	writeJSON(w, http.StatusOK, toResponse(saved))
+	out := toResponse(saved)
+	out.Warnings = warnings
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {

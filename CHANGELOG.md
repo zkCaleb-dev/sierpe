@@ -15,6 +15,15 @@ All notable changes to Sierpe are documented here. The format follows
   database; consumers that re-emit movements into their own pipelines
   need the event itself, not the decode. Rows ingested before the
   migration have no stored event to backfill from and omit the field.
+- `POST /v1/contracts` with explicit `kinds` now accepts a contract whose
+  instance is no longer live on chain (archived after TTL expiry — the
+  RPC cannot tell that apart from one that never existed). It registers
+  as classification `unknown` and the response carries a new `warnings`
+  array saying so; history is still derived from whatever sources reach,
+  which is the point: an archived contract's past exists in the History
+  Archives even when its instance does not. Without explicit kinds the
+  404 stands, since the kinds default is derived from the classification.
+  Re-registering after a restore re-classifies.
 
 ### Security
 

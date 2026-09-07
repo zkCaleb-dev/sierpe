@@ -109,8 +109,12 @@ Hard rules:
   a contract that does not exist on-chain rejects the POST (404).
 - Coverage is DERIVED from backfill watermark + cursor; there is no coverage table.
 - Registering before any cursor exists → backfill is done-at-birth with a warning.
-- Contracts whose instance is ARCHIVED (TTL expired) 404 on registration — known
-  limit; archived detection + restore is future work.
+- Contracts whose instance is ARCHIVED (TTL expired) register only with
+  explicit kinds: classification `unknown` + a `warnings` entry in the
+  response; without kinds the 404 stands (the kinds default derives from the
+  classification, so there is nothing honest to default to). The RPC cannot
+  distinguish archived from never-existed; a wrong id yields an empty,
+  honestly-covered history. Re-register after a restore to re-classify.
 - Cursors carry their `kind`; a cursor from `/events` is invalid on `/state`.
 
 ## Live RPC traps (both cost a smoke run; both have regression tests)

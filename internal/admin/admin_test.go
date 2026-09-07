@@ -325,7 +325,10 @@ func TestRegisterStoresClassification(t *testing.T) {
 	}
 }
 
-func TestRegisterUnknownContractIs404(t *testing.T) {
+// A contract with no live instance and no explicit kinds stays a 404: the
+// kinds default is derived from the classification, and with no instance
+// there is nothing honest to default to.
+func TestRegisterUnknownContractWithoutKindsIs404(t *testing.T) {
 	st := &fakeStore{}
 	cls := &fakeClassifier{err: registry.ErrContractNotFound}
 	srv := newTestServer(st, &fakeReloader{}, cls)
@@ -337,7 +340,49 @@ func TestRegisterUnknownContractIs404(t *testing.T) {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 	if len(st.upserted) != 0 {
-		t.Error("a contract missing on chain must not be registered")
+		t.Error("a contract missing on chain must not be registered by default")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "explicit kinds") {
+		t.Errorf("the 404 must name the archived escape hatch, got %s", body)
+	}
+}
+
+// Explicit kinds accept a contract whose instance is gone (archived after
+// TTL expiry) — the archive leg reconstructs its history regardless. The
+// acceptance is declared: classification unknown/opaque and a warning on
+// the response, never a silent success.
+func TestRegisterArchivedContractWithExplicitKinds(t *testing.T) {
+	st := &fakeStore{}
+	cls := &fakeClassifier{err: registry.ErrContractNotFound}
+	planner := &fakePlanner{cursor: store.Cursor{Sequence: 500}}
+	srv := newTestServerWithPlanner(st, planner, &fakeReloader{}, cls)
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/contracts", testToken,
+		`{"contract_id":"`+validContract+`","kinds":["events","state","movements"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(st.upserted) != 1 {
+		t.Fatalf("upserted %d contracts, want 1", len(st.upserted))
+	}
+	got := st.upserted[0]
+	if len(got.Kinds) != 3 || got.Kinds[2] != store.KindMovements {
+		t.Errorf("explicit kinds must persist verbatim, got %v", got.Kinds)
+	}
+	stored := string(got.Classification)
+	for _, fragment := range []string{`"type":"unknown"`, `"method":"opaque"`} {
+		if !strings.Contains(stored, fragment) {
+			t.Errorf("stored classification %s must contain %s", stored, fragment)
+		}
+	}
+	if len(planner.ensured) != 1 {
+		t.Errorf("backfill must be planned for an archived contract, got %v", planner.ensured)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"warnings"`) || !strings.Contains(string(body), "no live instance") {
+		t.Errorf("response must carry the warning, got %s", body)
 	}
 }
 

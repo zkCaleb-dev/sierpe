@@ -21,6 +21,11 @@ const (
 	TypeWasm     = "wasm"     // custom contract backed by uploaded wasm
 	TypeSAC      = "sac"      // built-in Stellar Asset Contract
 	TypeExternal = "external" // executable referencing another contract
+	// TypeUnknown marks a registration accepted without a live instance to
+	// classify from (archived after TTL expiry, or never deployed — the RPC
+	// cannot tell them apart). Not produced by Classify; the admin plane
+	// assigns it when the caller supplies explicit kinds.
+	TypeUnknown = "unknown"
 )
 
 // Classification methods: how the event names were discovered.
