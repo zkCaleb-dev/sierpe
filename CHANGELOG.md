@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-07
+
 ### Added
 
 - Movements now store and serve the raw ContractEvent XDR they were
