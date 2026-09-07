@@ -6,6 +6,16 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Movements now store and serve the raw ContractEvent XDR they were
+  decoded from (`rawXdr` on `/v1/contracts/{id}/movements`, migration
+  0011). The emitting token is usually not registered, so no events row
+  exists to join to and the original bytes were unrecoverable from the
+  database; consumers that re-emit movements into their own pipelines
+  need the event itself, not the decode. Rows ingested before the
+  migration have no stored event to backfill from and omit the field.
+
 ### Security
 
 - Toolchain pinned to go1.25.13 and vulnerable indirect dependencies

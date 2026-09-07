@@ -1,0 +1,13 @@
+-- v1.6: movements carry the raw ContractEvent XDR of the underlying
+-- transfer event.
+--
+-- A movement is usually emitted by a token contract nobody registered, so
+-- no events row exists to join to and the raw event is otherwise
+-- unrecoverable from this database — only from the chain (the same reason
+-- every decoded column is carried on the row, see 0010). Downstream
+-- consumers that re-emit movements into their own pipelines (e.g. an
+-- escrow deposit feed) need the original event bytes, not our decode.
+--
+-- Nullable: rows ingested before this migration have no stored event to
+-- backfill from. New rows always carry it.
+ALTER TABLE movements ADD COLUMN raw_xdr text;

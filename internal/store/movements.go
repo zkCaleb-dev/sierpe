@@ -37,8 +37,14 @@ type Movement struct {
 	TransferType    string
 	Counterparty    string // the other side; empty on mint (in) and burn (out)
 	Amount          string // i128 as decimal text, raw token units
-	LedgerSequence  uint32
-	ClosedAt        time.Time
+	// RawXDR is the base64 marshal of the full ContractEvent this movement
+	// was decoded from. The emitting token is usually not registered, so no
+	// events row exists to join to — without this column the original event
+	// bytes are unrecoverable from the database. Empty only on rows
+	// ingested before migration 0011.
+	RawXDR         string
+	LedgerSequence uint32
+	ClosedAt       time.Time
 }
 
 // insertMovements batches a ledger's movement attributions into the open
@@ -58,11 +64,11 @@ func insertMovements(ctx context.Context, tx pgx.Tx, network string, movements [
 		batch.Queue(`
 			INSERT INTO movements (
 				network, contract_id, transfer_id, role, token_contract_id,
-				transfer_type, counterparty, amount, ledger_sequence, closed_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10)
+				transfer_type, counterparty, amount, raw_xdr, ledger_sequence, closed_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,$11)
 			ON CONFLICT (network, contract_id, transfer_id, role) DO NOTHING`,
 			network, m.ContractID, m.TransferID, m.Role, m.TokenContractID,
-			m.TransferType, nullable(m.Counterparty), m.Amount,
+			m.TransferType, nullable(m.Counterparty), m.Amount, nullable(m.RawXDR),
 			int64(m.LedgerSequence), m.ClosedAt,
 		)
 	}
@@ -98,7 +104,8 @@ type MovementQuery struct {
 func (s *Store) QueryMovements(ctx context.Context, network string, q MovementQuery) ([]Movement, bool, error) {
 	sql := `
 		SELECT contract_id, transfer_id, role, token_contract_id, transfer_type,
-		       COALESCE(counterparty, ''), amount::text, ledger_sequence, closed_at
+		       COALESCE(counterparty, ''), amount::text, COALESCE(raw_xdr, ''),
+		       ledger_sequence, closed_at
 		FROM movements
 		WHERE network = $1 AND contract_id = $2 AND ledger_sequence >= $3`
 	args := []any{network, q.ContractID, int64(q.FromLedger)}
@@ -139,7 +146,7 @@ func (s *Store) QueryMovements(ctx context.Context, network string, q MovementQu
 		var m Movement
 		var seq int64
 		if err := rows.Scan(&m.ContractID, &m.TransferID, &m.Role, &m.TokenContractID,
-			&m.TransferType, &m.Counterparty, &m.Amount, &seq, &m.ClosedAt); err != nil {
+			&m.TransferType, &m.Counterparty, &m.Amount, &m.RawXDR, &seq, &m.ClosedAt); err != nil {
 			return nil, false, fmt.Errorf("store: scan movement: %w", err)
 		}
 		m.LedgerSequence = uint32(seq)

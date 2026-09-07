@@ -42,7 +42,9 @@ func participatesWatched(body xdr.ContractEventV0, watch *registry.Snapshot) boo
 // movementsOf turns one decoded transfer into the attributions owed to the
 // contracts that took part in it. A self-transfer yields two rows for one
 // event — one per role — which is why role is part of the identity.
-func movementsOf(t store.Transfer, watch *registry.Snapshot) []store.Movement {
+// rawXDR is the base64 marshal of the source ContractEvent; both
+// attributions of a self-transfer share it, as they share the event.
+func movementsOf(t store.Transfer, rawXDR string, watch *registry.Snapshot) []store.Movement {
 	var out []store.Movement
 	add := func(owner, role, counterparty string) {
 		if owner == "" {
@@ -60,6 +62,7 @@ func movementsOf(t store.Transfer, watch *registry.Snapshot) []store.Movement {
 			TransferType:    t.TransferType,
 			Counterparty:    counterparty,
 			Amount:          t.Amount,
+			RawXDR:          rawXDR,
 			LedgerSequence:  t.LedgerSequence,
 			ClosedAt:        t.ClosedAt,
 		})

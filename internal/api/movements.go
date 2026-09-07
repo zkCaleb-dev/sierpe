@@ -34,8 +34,13 @@ type movementRecord struct {
 	TransferType    string `json:"transferType"`
 	Counterparty    string `json:"counterparty,omitempty"`
 	Amount          string `json:"amount"`
-	Ledger          uint32 `json:"ledger"`
-	LedgerClosedAt  string `json:"ledgerClosedAt"`
+	// RawXDR is the base64 ContractEvent the movement was decoded from —
+	// the original bytes, since the emitting token is usually not
+	// registered and no events row exists to join to. Empty only for rows
+	// ingested before migration 0011.
+	RawXDR         string `json:"rawXdr,omitempty"`
+	Ledger         uint32 `json:"ledger"`
+	LedgerClosedAt string `json:"ledgerClosedAt"`
 }
 
 type movementsResponse struct {
@@ -161,6 +166,7 @@ func (s *Server) handleMovements(w http.ResponseWriter, r *http.Request, movemen
 			TransferType:    m.TransferType,
 			Counterparty:    m.Counterparty,
 			Amount:          m.Amount,
+			RawXDR:          m.RawXDR,
 			Ledger:          m.LedgerSequence,
 			LedgerClosedAt:  m.ClosedAt.UTC().Format(time.RFC3339),
 		})

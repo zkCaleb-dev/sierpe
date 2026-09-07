@@ -216,7 +216,22 @@ func txEvents(tx ingest.LedgerTransaction, seq uint32, closedAt time.Time, watch
 				res.Transfers = append(res.Transfers, record)
 			}
 			if wantMovements {
-				res.Movements = append(res.Movements, movementsOf(record, watch)...)
+				// Movements carry the original event bytes: the emitter is
+				// usually a foreign token with no events row to join to, so
+				// this is the only place the raw event can be captured. An
+				// encode failure follows the same accounting as a decode
+				// failure above — the movement is refused, the transfer row
+				// (when the emitter is watched) already landed.
+				rawXDR, err := xdr.MarshalBase64(ev)
+				if err != nil {
+					if emitsTransfers {
+						res.SuppressedTransfers++
+					} else {
+						res.ForeignUndecodable++
+					}
+					continue
+				}
+				res.Movements = append(res.Movements, movementsOf(record, rawXDR, watch)...)
 			}
 		}
 	}
