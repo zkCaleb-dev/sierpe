@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-09-07
+
 ### Fixed
 
 - The getLedgers batch shrink (1.5.1) had no memory: every call restarted
