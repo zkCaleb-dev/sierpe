@@ -235,3 +235,49 @@ func TestOversizedResponseShrinksUntilItFits(t *testing.T) {
 		t.Errorf("settled on limit %d, which the endpoint cannot serve", last)
 	}
 }
+
+// The size that fit must be REMEMBERED across calls: shrinking from
+// scratch every time re-pays the aborted oversized downloads, which
+// multiplied the bandwidth of a heavy-range walk several times over
+// (found on the first mainnet homelab deployment, ~1.75 MB of meta per
+// ledger near the tip). Quiet ranges still earn their big batches back
+// through paced probes.
+func TestBatchCeilingIsRememberedAndRecovers(t *testing.T) {
+	var calls []int
+	srv := sizedLedgerRPC(t, 12, &calls)
+	defer srv.Close()
+	c, _ := New([]string{srv.URL})
+	c.bodyCap = 64 << 10
+
+	if _, err := c.GetLedgerBatch(context.Background(), 10, 200); err != nil {
+		t.Fatalf("first call error = %v", err)
+	}
+	n := len(calls)
+
+	if _, err := c.GetLedgerBatch(context.Background(), 30, 200); err != nil {
+		t.Fatalf("second call error = %v", err)
+	}
+	second := calls[n:]
+	if len(second) != 1 || second[0] > 12 {
+		t.Errorf("second call attempted %v, want exactly one request at the remembered ceiling", second)
+	}
+
+	// Paced recovery: within a bounded number of successful calls, one
+	// probe above the ceiling must appear — and every call must still
+	// return data even when its probe overflows and re-shrinks.
+	probed := false
+	for i := 0; i < 3*batchGrowEvery; i++ {
+		batch, err := c.GetLedgerBatch(context.Background(), 50, 200)
+		if err != nil || len(batch) == 0 {
+			t.Fatalf("call %d: batch=%d err=%v", i, len(batch), err)
+		}
+	}
+	for _, l := range calls[n:] {
+		if l > 12 {
+			probed = true
+		}
+	}
+	if !probed {
+		t.Errorf("attempted limits %v never probed above the ceiling: a lightened range could never recover its batch size", calls[n:])
+	}
+}

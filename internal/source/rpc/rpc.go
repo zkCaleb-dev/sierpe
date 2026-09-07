@@ -46,6 +46,15 @@ type Client struct {
 	// A field rather than the bare constant so tests can exercise the
 	// overflow path without moving 64 MB around.
 	bodyCap int
+	// batchCeiling remembers the largest getLedgers batch the range being
+	// walked could serve under bodyCap. Halving on overflow without memory
+	// made EVERY call re-pay the aborted oversized downloads: on heavy
+	// mainnet ranges that quadrupled the bandwidth of a backfill (found on
+	// the first homelab deployment, ~1.75 MB of meta per ledger near the
+	// tip). batchWins counts successes since the last overflow so recovery
+	// probes stay paced.
+	batchCeiling atomic.Int32
+	batchWins    atomic.Int32
 }
 
 // New builds a Client over the given endpoint pool. The pool must not be
@@ -54,11 +63,13 @@ func New(urls []string) (*Client, error) {
 	if len(urls) == 0 {
 		return nil, errors.New("rpc: endpoint pool is empty")
 	}
-	return &Client{
+	c := &Client{
 		urls:    urls,
 		http:    &http.Client{Timeout: attemptTimeout},
 		bodyCap: maxBodyBytes,
-	}, nil
+	}
+	c.batchCeiling.Store(maxBatchLimit)
+	return c, nil
 }
 
 // Failovers reports how many times the pool had to switch endpoints.
@@ -167,16 +178,20 @@ func (c *Client) classifyOutOfRange(ctx context.Context, seq uint32) error {
 // maxBatchLimit is the getLedgers pagination cap enforced by Stellar RPC.
 const maxBatchLimit = 200
 
+// batchGrowEvery is how many successful reduced batches earn one probe at
+// a 25% larger size. Pacing the probes bounds the recovery overhead to
+// roughly one aborted body cap per batchGrowEvery good batches.
+const batchGrowEvery = 8
+
 // GetLedgerBatch fetches up to limit consecutive ledgers ascending from
-// start. It returns what the endpoint served (possibly fewer than limit);
-// window errors classify exactly like GetLedger.
-// GetLedgerBatch fetches up to limit ledgers starting at start. It may
-// return FEWER than asked for: ledger meta size is data-dependent and
-// unbounded, so a batch that is fine over a quiet range can be hundreds of
-// megabytes over a busy one. When the answer overflows the body cap this
-// halves the request and tries again, down to a single ledger, because a
-// caller that keeps asking for the same oversized batch never advances.
-// Callers already tolerate short batches (the RPC caps pagination anyway).
+// start. It may return FEWER than asked for: ledger meta size is
+// data-dependent and unbounded, so a batch that is fine over a quiet range
+// can be hundreds of megabytes over a busy one. When the answer overflows
+// the body cap this halves the request and tries again, down to a single
+// ledger, and REMEMBERS the size that fit for the calls that follow, with
+// paced probes back up (see batchGrowEvery). Callers already tolerate
+// short batches (the RPC caps pagination anyway); window errors classify
+// exactly like GetLedger.
 func (c *Client) GetLedgerBatch(ctx context.Context, start uint32, limit int) ([]xdr.LedgerCloseMeta, error) {
 	if limit > maxBatchLimit {
 		limit = maxBatchLimit
@@ -184,11 +199,28 @@ func (c *Client) GetLedgerBatch(ctx context.Context, start uint32, limit int) ([
 	if limit < 1 {
 		limit = 1
 	}
+	// Start from the remembered ceiling, not the caller's ask: an aborted
+	// oversized download costs up to a whole body cap, and paying it once
+	// per call instead of once per shrink multiplied a heavy walk's
+	// bandwidth several times over.
+	eff := max(min(limit, int(c.batchCeiling.Load())), 1)
 	for {
-		out, err := c.getLedgerBatchOnce(ctx, start, limit)
-		if errors.Is(err, errResponseTooLarge) && limit > 1 {
-			limit /= 2
+		out, err := c.getLedgerBatchOnce(ctx, start, eff)
+		if errors.Is(err, errResponseTooLarge) && eff > 1 {
+			eff /= 2
+			c.batchCeiling.Store(int32(eff))
+			c.batchWins.Store(0)
 			continue
+		}
+		if err == nil && eff < limit {
+			// Ledger meta lightens as a walk descends into the past, so a
+			// pinned-low ceiling would trade the bandwidth waste for a
+			// round-trip waste. Probe a quarter higher after every
+			// batchGrowEvery successes: at most one aborted body per
+			// batchGrowEvery good batches while a range stays heavy.
+			if c.batchWins.Add(1)%batchGrowEvery == 0 {
+				c.batchCeiling.Store(int32(min(maxBatchLimit, eff+max(eff/4, 1))))
+			}
 		}
 		return out, err
 	}
