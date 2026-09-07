@@ -41,6 +41,7 @@ func sampleMovement(id, role string) store.Movement {
 		TransferType:    store.TransferTypeTransfer,
 		Counterparty:    "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H",
 		Amount:          "690000000",
+		RawXDR:          "cmF3LWV2ZW50LXhkcg==",
 		LedgerSequence:  5500,
 		ClosedAt:        time.Unix(1_700_000_000, 0).UTC(),
 	}
@@ -68,6 +69,9 @@ func TestMovementsHappyPath(t *testing.T) {
 	m := resp.Movements[0]
 	if m.Role != store.RoleRecipient || m.Amount != "690000000" || m.TokenContractID == "" {
 		t.Errorf("record = %+v", m)
+	}
+	if m.RawXDR != "cmF3LWV2ZW50LXhkcg==" {
+		t.Errorf("rawXdr = %q, want the stored event bytes", m.RawXDR)
 	}
 	if resp.ScanStatus != scanHasMore {
 		t.Errorf("scanStatus = %s", resp.ScanStatus)

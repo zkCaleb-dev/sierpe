@@ -797,6 +797,13 @@ components:
           type: string
           description: The other side; absent on mint (in) and burn (out).
         amount: { type: string, description: Exact i128 amount in raw token units. }
+        rawXdr:
+          type: string
+          description: >
+            Base64 XDR of the full ContractEvent this movement was decoded
+            from — the original bytes, since the emitting token is usually
+            not registered and no events row exists to join to. Absent only
+            on rows ingested before migration 0011.
         ledger: { type: integer }
         ledgerClosedAt: { type: string, format: date-time }
 

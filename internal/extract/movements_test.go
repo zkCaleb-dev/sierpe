@@ -47,6 +47,19 @@ func TestMovementsCaptureAPaymentFromAnUnwatchedToken(t *testing.T) {
 	if m.Amount != "690000000" {
 		t.Errorf("amount = %s", m.Amount)
 	}
+	// The movement must carry the original event: the emitter has no events
+	// row to join to, so these bytes are otherwise gone from the database.
+	if m.RawXDR == "" {
+		t.Fatal("movement carries no raw event XDR")
+	}
+	var ev xdr.ContractEvent
+	if err := xdr.SafeUnmarshalBase64(m.RawXDR, &ev); err != nil {
+		t.Fatalf("raw XDR does not decode as a ContractEvent: %v", err)
+	}
+	sym, ok := ev.Body.MustV0().Topics[0].GetSym()
+	if !ok || string(sym) != "transfer" {
+		t.Errorf("decoded raw event topic0 = %v, want transfer", ev.Body.MustV0().Topics[0])
+	}
 }
 
 func TestMovementsRecordBothDirections(t *testing.T) {
@@ -72,6 +85,9 @@ func TestMovementsSelfTransferYieldsBothRoles(t *testing.T) {
 	)
 	if len(res.Movements) != 2 {
 		t.Fatalf("self transfer movements = %d, want 2", len(res.Movements))
+	}
+	if res.Movements[0].RawXDR == "" || res.Movements[0].RawXDR != res.Movements[1].RawXDR {
+		t.Errorf("both attributions must share the source event bytes")
 	}
 	roles := map[string]bool{res.Movements[0].Role: true, res.Movements[1].Role: true}
 	if !roles[store.RoleSender] || !roles[store.RoleRecipient] {

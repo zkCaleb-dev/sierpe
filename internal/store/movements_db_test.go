@@ -15,6 +15,7 @@ func testMovement(transferID, role, token string, ledger uint32) Movement {
 		TransferType:    TransferTypeTransfer,
 		Counterparty:    "GOTHER",
 		Amount:          "690000000",
+		RawXDR:          "cmF3LWV2ZW50LXhkcg==",
 		LedgerSequence:  ledger,
 		ClosedAt:        time.Unix(1_700_000_000, 0).UTC(),
 	}
@@ -74,6 +75,8 @@ func TestQueryMovements(t *testing.T) {
 
 	if rows, _, err := s.QueryMovements(ctx, "testnet", base); err != nil || len(rows) != 3 {
 		t.Errorf("unfiltered rows = %d err = %v, want 3", len(rows), err)
+	} else if rows[0].RawXDR != "cmF3LWV2ZW50LXhkcg==" {
+		t.Errorf("raw XDR did not round-trip: %q", rows[0].RawXDR)
 	}
 
 	q := base
