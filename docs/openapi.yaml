@@ -32,6 +32,14 @@ paths:
         a descending backfill at the current cursor, and starts following it
         live. Re-registering reconciles kinds; a deeper `from` reopens a
         finished backfill; progress is never reset.
+
+        A contract with no live instance (archived after TTL expiry — the
+        RPC cannot tell that apart from one that never existed) is accepted
+        when `kinds` is explicit: classification comes back `unknown` with a
+        `warnings` entry, and history is still derived from whatever sources
+        reach. Without explicit kinds it stays a 404, because the kinds
+        default is derived from the classification. Re-register after a
+        restore to classify it properly.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -75,7 +83,10 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404":
-          description: The contract does not exist on this network.
+          description: >
+            The contract has no live instance on this network and no
+            explicit kinds were supplied. If it is archived (TTL expired),
+            repeat the request with explicit kinds.
         "502":
           description: The chain could not be read to classify; retry later.
 
@@ -496,13 +507,25 @@ components:
         classification:
           $ref: "#/components/schemas/Classification"
         registered_at: { type: string, format: date-time }
+        warnings:
+          type: array
+          items: { type: string }
+          description: >
+            Anything the registration accepted but could not verify — e.g.
+            a contract registered without a live instance. Absent when
+            there is nothing to warn about.
 
     Classification:
       type: object
       nullable: true
       description: What registration learned from the chain. Advisory.
       properties:
-        type: { type: string, enum: [wasm, sac, external] }
+        type:
+          type: string
+          enum: [wasm, sac, external, unknown]
+          description: >
+            unknown means the registration was accepted without a live
+            instance to classify from (archived or never deployed).
         wasm_hash: { type: string, description: Hex code hash (wasm only). }
         events:
           type: array
