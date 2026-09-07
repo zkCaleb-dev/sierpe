@@ -6,6 +6,19 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- New gaps are trimmed against the open ones below them, and a resolving
+  gap hands its clamped registrations to the deepest gap still open.
+  Registrations arrive in batches over days and every batch clamps at
+  its own ever-rising retention wall; untrimmed gaps overlapped on
+  everything below the previous wall, so the archive leg replayed the
+  same deep history once per batch — for a staged mainnet backfill that
+  tripled the captive-core replay. An open gap is a standing promise to
+  heal its range, so the trim leaves the un-vouched set exactly as it
+  was, and the handoff keeps a late batch's declared coverage descending
+  with the deeper heal instead of freezing at the shared floor.
+
 ## [1.7.0] - 2026-09-07
 
 ### Fixed
