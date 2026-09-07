@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-09-07
+
 ### Fixed
 
 - The events cursor now carries and enforces its kind. Every other
