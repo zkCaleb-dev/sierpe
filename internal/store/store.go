@@ -204,18 +204,52 @@ func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerReco
 
 // RecordGap persists an unserved range before it is skipped. Idempotent:
 // the deterministic id makes re-recording on restart a no-op.
+//
+// The bottom of the range is TRIMMED past any open gap that already covers
+// it: registrations arrive in batches over days, every batch clamps at its
+// own (ever-rising) retention wall, and untrimmed gaps would overlap on
+// everything below the previous wall — making the healer replay the same
+// millions of ledgers once per batch. An open gap is a standing promise to
+// heal its range, so excluding it keeps the un-vouched set exactly the
+// same; the handoff in CommitHealChunk keeps the trimmed batch's coverage
+// honest below its own floor.
 func (s *Store) RecordGap(ctx context.Context, network string, from, to uint32, reason string) error {
-	id := fmt.Sprintf("gap:%s:%d:%d", network, from, to)
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO gaps (id, network, from_sequence, to_sequence, reason)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (id) DO NOTHING`,
-		id, network, int64(from), int64(to), reason,
-	)
-	if err != nil {
-		return fmt.Errorf("store: record gap: %w", err)
-	}
-	return nil
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		floor := int64(from)
+		for {
+			var coveredTo int64
+			err := tx.QueryRow(ctx, `
+				SELECT to_sequence FROM gaps
+				WHERE network = $1 AND resolved_at IS NULL
+				  AND from_sequence <= $2 AND to_sequence >= $2
+				ORDER BY to_sequence DESC
+				LIMIT 1
+				FOR UPDATE`, network, floor,
+			).Scan(&coveredTo)
+			if errors.Is(err, pgx.ErrNoRows) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("store: trim gap floor: %w", err)
+			}
+			floor = coveredTo + 1
+			if floor > int64(to) {
+				// Every ledger of the range is already promised by open
+				// gaps; nothing new to record.
+				return nil
+			}
+		}
+		id := fmt.Sprintf("gap:%s:%d:%d", network, floor, to)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO gaps (id, network, from_sequence, to_sequence, reason)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (id) DO NOTHING`,
+			id, network, floor, int64(to), reason,
+		); err != nil {
+			return fmt.Errorf("store: record gap: %w", err)
+		}
+		return nil
+	})
 }
 
 // OpenGaps counts unresolved gaps for /status and metrics.

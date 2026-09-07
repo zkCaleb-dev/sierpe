@@ -124,6 +124,44 @@ func (s *Store) CommitHealChunk(ctx context.Context, network string, gap Gap, ne
 		); err != nil {
 			return fmt.Errorf("store: clear healed backfill clamp: %w", err)
 		}
+
+		// Handoff on resolution. RecordGap trims a new gap past the open
+		// ones below it, so a registration clamped at this gap's wall may
+		// have a target deeper than the gap's own floor: its remaining
+		// history is owed by an older, deeper gap. Point each such row at
+		// the deepest still-open gap that reaches its target — that gap's
+		// heal commits will keep dragging the row's frontier down — and
+		// close the rows with nothing open below, whose deep history has
+		// already been healed by gaps since resolved (rule 7: the declared
+		// coverage follows what was actually derived, in both directions).
+		if resolved {
+			if _, err := tx.Exec(ctx, `
+				UPDATE backfill b
+				SET clamped_at = d.to_sequence + 1, updated_at = now()
+				FROM gaps d
+				WHERE b.network = $1 AND b.clamped_at = $2 AND b.target_from < $3
+				  AND d.network = $1 AND d.resolved_at IS NULL
+				  AND d.to_sequence < $3 AND d.to_sequence >= b.target_from
+				  AND d.to_sequence = (
+					SELECT max(g.to_sequence) FROM gaps g
+					WHERE g.network = $1 AND g.resolved_at IS NULL AND g.to_sequence < $3)`,
+				network, int64(gap.To)+1, int64(gap.From),
+			); err != nil {
+				return fmt.Errorf("store: hand clamp to the deeper gap: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE backfill
+				SET next_to = GREATEST(target_from, 1) - 1, clamped_at = NULL, updated_at = now()
+				WHERE network = $1 AND clamped_at = $2
+				  AND NOT EXISTS (
+					SELECT 1 FROM gaps g
+					WHERE g.network = $1 AND g.resolved_at IS NULL
+					  AND g.to_sequence < $3 AND g.to_sequence >= backfill.target_from)`,
+				network, int64(gap.To)+1, int64(gap.From),
+			); err != nil {
+				return fmt.Errorf("store: close fully healed clamp: %w", err)
+			}
+		}
 		return nil
 	})
 }
