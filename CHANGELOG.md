@@ -6,6 +6,18 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The getLedgers batch shrink (1.5.1) had no memory: every call restarted
+  at the full batch size and re-paid the aborted oversized downloads
+  against the body cap, silently multiplying the bandwidth of a
+  heavy-range walk roughly four times (found on the first mainnet homelab
+  deployment: ~1.75 MB of meta per ledger near the tip, ~3.5 GB
+  downloaded before the first chunk could commit). The client now
+  remembers the batch size that fit and probes 25% higher only after
+  every 8 successful batches, so heavy ranges pay at most one aborted
+  body per 8 good batches and quiet ranges earn their big batches back.
+
 ### Changed
 
 - Backfill walks now share their scans. Chunks sit on an absolute
