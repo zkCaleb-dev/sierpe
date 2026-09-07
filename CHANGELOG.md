@@ -6,6 +6,13 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Toolchain pinned to go1.25.13 and vulnerable indirect dependencies
+  upgraded (grpc 1.82.1, aws-sdk-go-v2 eventstream 1.7.8 / s3 1.97.3):
+  clears every reachable finding govulncheck reported against binaries
+  built from go1.25.0.
+
 ## [1.5.2] - 2026-08-21
 
 ### Added
