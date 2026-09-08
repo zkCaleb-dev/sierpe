@@ -58,6 +58,24 @@ func TestLoadArchiveLeg(t *testing.T) {
 	if !strings.Contains(cfg.Redacted(), "core=/bin/ls") {
 		t.Errorf("Redacted() must show the archive config, got %s", cfg.Redacted())
 	}
+	if cfg.HealChunkLedgers != 0 {
+		t.Errorf("HealChunkLedgers = %d, want 0 (healer default) when unset", cfg.HealChunkLedgers)
+	}
+	if !strings.Contains(cfg.Redacted(), "heal_chunk=default") {
+		t.Errorf("Redacted() must show the default heal chunk, got %s", cfg.Redacted())
+	}
+
+	m["HEAL_CHUNK_LEDGERS"] = "500000"
+	cfg, err = Load(env(m))
+	if err != nil {
+		t.Fatalf("Load() with HEAL_CHUNK_LEDGERS error = %v", err)
+	}
+	if cfg.HealChunkLedgers != 500000 {
+		t.Errorf("HealChunkLedgers = %d, want 500000", cfg.HealChunkLedgers)
+	}
+	if !strings.Contains(cfg.Redacted(), "heal_chunk=500000") {
+		t.Errorf("Redacted() must show the configured heal chunk, got %s", cfg.Redacted())
+	}
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -81,6 +99,15 @@ func TestLoadErrors(t *testing.T) {
 		{"core binary is a directory", func(m map[string]string) { m["STELLAR_CORE_BINARY"] = "/tmp" }, "not an executable file"},
 		{"archives without core", func(m map[string]string) { m["HISTORY_ARCHIVE_URLS"] = "https://archives.example.com" }, "STELLAR_CORE_BINARY is not"},
 		{"storage without core", func(m map[string]string) { m["CAPTIVE_STORAGE_PATH"] = "/var/captive" }, "STELLAR_CORE_BINARY is not"},
+		{"heal chunk without core", func(m map[string]string) { m["HEAL_CHUNK_LEDGERS"] = "500000" }, "STELLAR_CORE_BINARY is not"},
+		{"heal chunk not a number", func(m map[string]string) {
+			m["STELLAR_CORE_BINARY"] = "/bin/ls"
+			m["HEAL_CHUNK_LEDGERS"] = "many"
+		}, "HEAL_CHUNK_LEDGERS"},
+		{"heal chunk below a checkpoint", func(m map[string]string) {
+			m["STELLAR_CORE_BINARY"] = "/bin/ls"
+			m["HEAL_CHUNK_LEDGERS"] = "63"
+		}, "HEAL_CHUNK_LEDGERS"},
 		{"bad archive url", func(m map[string]string) {
 			m["STELLAR_CORE_BINARY"] = "/bin/ls"
 			m["HISTORY_ARCHIVE_URLS"] = "not a url"

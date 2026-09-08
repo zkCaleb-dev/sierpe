@@ -17,6 +17,7 @@ appliance; pick the one that matches your infrastructure.
 | `STELLAR_CORE_BINARY` | no | Path to a stellar-core binary; enables the archive leg. Pre-set in the `-full` image. |
 | `HISTORY_ARCHIVE_URLS` | no | History archives for the archive leg. Defaults to the SDF public archives. |
 | `CAPTIVE_STORAGE_PATH` | no | Scratch space for captive core buckets (disposable). Defaults to the OS temp dir. |
+| `HEAL_CHUNK_LEDGERS` | no | Ledgers per atomic heal chunk (default 100000, min 64). Every chunk is a fresh captive core run that re-downloads its checkpoint's bucket set, so larger chunks amortize a fixed multi-minute download; the chunk's records are held in memory until its single commit, so very large values trade RAM and lost replay work on a crash. Raise it on slow links healing deep gaps. |
 
 Operational truths that apply everywhere:
 

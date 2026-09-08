@@ -140,7 +140,7 @@ func newTestHealer(t *testing.T, replayer *fakeReplayer, st *fakeHealStore, inst
 	t.Helper()
 	h := NewHealer("testnet", "Test SDF Network ; September 2015",
 		replayer, replayer.chain, st, emptyWatch(t), inst,
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
+		slog.New(slog.NewTextHandler(io.Discard, nil)), 2000)
 	h.idle = 2 * time.Millisecond
 	return h
 }
@@ -207,6 +207,16 @@ func TestHealerHealsGapInChunksAndResolves(t *testing.T) {
 	}
 	if inst.states[len(inst.states)-1] != ArchiveStateVerified {
 		t.Errorf("final state = %s, want verified", inst.states[len(inst.states)-1])
+	}
+}
+
+func TestHealerZeroChunkSizeUsesDefault(t *testing.T) {
+	chain := &fakeChunkChain{oldest: 1, tip: 20_000}
+	h := NewHealer("testnet", "Test SDF Network ; September 2015",
+		&fakeReplayer{chain: chain}, chain, &fakeHealStore{}, emptyWatch(t), &healInst{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)), 0)
+	if h.chunk != defaultHealChunkLedgers {
+		t.Errorf("chunk = %d, want default %d", h.chunk, defaultHealChunkLedgers)
 	}
 }
 
