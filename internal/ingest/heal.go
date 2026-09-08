@@ -18,8 +18,15 @@ import (
 )
 
 const (
-	// healChunkSize is how many ledgers one atomic heal chunk covers.
-	healChunkSize = 2000
+	// defaultHealChunkLedgers is how many ledgers one atomic heal chunk
+	// covers when HEAL_CHUNK_LEDGERS is not set. A chunk is one captive
+	// core run, and the SDK gives every bounded catchup a fresh ephemeral
+	// working directory (deleted on close), so each chunk re-downloads the
+	// full bucket set of its anchor checkpoint. That per-chunk cost is
+	// fixed and large (minutes of archive download); the chunk size is
+	// what amortizes it. Small chunks turn a multi-million-ledger heal
+	// into weeks of redundant bucket downloads.
+	defaultHealChunkLedgers = 100_000
 	// healIdle paces the worker when there are no open gaps.
 	healIdle = 60 * time.Second
 	// equivalenceSample is how many ledgers the gate compares byte-for-byte
@@ -93,15 +100,24 @@ type Healer struct {
 	// idle paces the loop between rounds with nothing to do; a field so
 	// tests can shrink it.
 	idle time.Duration
+	// chunk is how many ledgers one atomic heal chunk covers — one captive
+	// core run, one bucket-set download. Records for the whole chunk are
+	// held in memory until the single commit, so the size trades archive
+	// re-download overhead against RAM and lost replay work on a crash.
+	chunk uint32
 }
 
-// NewHealer wires a Healer. All collaborators are required.
+// NewHealer wires a Healer. All collaborators are required; chunkLedgers 0
+// means the default chunk size.
 func NewHealer(network, passphrase string, archive healReplayer, rpc chunkSource,
-	st healStore, watch watchSource, inst healInstruments, log *slog.Logger) *Healer {
+	st healStore, watch watchSource, inst healInstruments, log *slog.Logger, chunkLedgers uint32) *Healer {
+	if chunkLedgers == 0 {
+		chunkLedgers = defaultHealChunkLedgers
+	}
 	return &Healer{
 		network: network, passphrase: passphrase,
 		archive: archive, rpc: rpc, store: st, watch: watch, inst: inst, log: log,
-		idle: healIdle,
+		idle: healIdle, chunk: chunkLedgers,
 	}
 }
 
@@ -177,8 +193,8 @@ func (h *Healer) Run(ctx context.Context) {
 func (h *Healer) healChunk(ctx context.Context, gap store.Gap) error {
 	to := gap.HealNextTo
 	chunkFrom := gap.From
-	if span := to - gap.From; span >= healChunkSize {
-		chunkFrom = to - healChunkSize + 1
+	if span := to - gap.From; span >= h.chunk {
+		chunkFrom = to - h.chunk + 1
 	}
 
 	snap := h.watch.Snapshot()

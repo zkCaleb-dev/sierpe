@@ -6,6 +6,19 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Heal chunks grew from 2,000 to 100,000 ledgers (new `HEAL_CHUNK_LEDGERS`
+  to tune). Every chunk is a fresh captive core run, and the SDK gives each
+  bounded catchup an ephemeral working directory it deletes on close, so a
+  chunk re-downloads the full bucket set of its anchor checkpoint every
+  time — a fixed multi-minute cost that made deep heals spend days on
+  redundant downloads (a 6M-ledger gap paid it ~3,100 times; on a
+  residential link that modeled out to weeks). The chunk size is what
+  amortizes that cost; it also bounds the records held in memory before
+  the chunk's single atomic commit, so the knob trades download overhead
+  against RAM and lost replay work on a crash.
+
 ## [1.8.0] - 2026-09-07
 
 ### Fixed

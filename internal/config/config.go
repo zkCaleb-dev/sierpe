@@ -81,6 +81,13 @@ type Config struct {
 	// CaptiveStoragePath is where captive core keeps its bucket data.
 	// Contents are disposable (re-downloaded on demand).
 	CaptiveStoragePath string
+	// HealChunkLedgers is how many ledgers one atomic heal chunk covers.
+	// Each chunk is a fresh captive core run that re-downloads its anchor
+	// checkpoint's bucket set, so the size amortizes a fixed multi-minute
+	// cost; records for the chunk stay in memory until its single commit.
+	// Zero means the healer's default. Only meaningful when CoreBinary is
+	// set.
+	HealChunkLedgers uint32
 	// BasicAuthUser and BasicAuthPassword gate the ENTIRE http surface
 	// (UI included) behind Basic Auth when set, except /health and /ready
 	// which orchestrator probes must reach without credentials. Empty
@@ -192,6 +199,17 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 		}
 		cfg.CaptiveStoragePath = p
 	}
+	if raw, ok := lookup("HEAL_CHUNK_LEDGERS"); ok && raw != "" {
+		if cfg.CoreBinary == "" {
+			errs = append(errs, "HEAL_CHUNK_LEDGERS is set but STELLAR_CORE_BINARY is not; the archive leg needs both")
+		}
+		v, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil || v < 64 {
+			errs = append(errs, fmt.Sprintf("HEAL_CHUNK_LEDGERS %q must be an integer >= 64 (one checkpoint)", raw))
+		} else {
+			cfg.HealChunkLedgers = uint32(v)
+		}
+	}
 
 	if raw, ok := lookup("HTTP_BASIC_AUTH"); ok && raw != "" {
 		user, pass, found := strings.Cut(raw, ":")
@@ -267,7 +285,12 @@ func (c *Config) Redacted() string {
 				archiveHosts = append(archiveHosts, "<invalid>")
 			}
 		}
-		archive = fmt.Sprintf("core=%s archives=[%s]", c.CoreBinary, strings.Join(archiveHosts, " "))
+		healChunk := "default"
+		if c.HealChunkLedgers != 0 {
+			healChunk = strconv.FormatUint(uint64(c.HealChunkLedgers), 10)
+		}
+		archive = fmt.Sprintf("core=%s archives=[%s] heal_chunk=%s",
+			c.CoreBinary, strings.Join(archiveHosts, " "), healChunk)
 	}
 	basicAuth := "off"
 	if c.BasicAuthEnabled() {
