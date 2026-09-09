@@ -123,11 +123,11 @@ produced a row. Two properties matter, and one of them is subtle:
   are never extracted, so a bare `extendFootprintTTL` produces nothing and
   needs no hint. But the creation of a contract's instance at deploy time, and
   the restore of an archived entry, *are* contract-data changes and may carry
-  no event. Across the 1,270 deployments found for the pilot's registered set,
-  **108 had no event anywhere in their deployment ledger**: an events-only plan
-  would have left 8.5% of the instance creations outside every interval, and
-  padding would not have rescued them, since a deployment can sit months away
-  from the nearest cluster. The common pattern does carry an event — the pilot
+  no event. The pilot's 1,285 registered contracts were deployed across 1,270
+  distinct ledgers, and **108 of those contracts — 8.4% — were deployed in a
+  ledger holding no event at all**, which puts 108 deployment ledgers outside
+  an events-only hint. Padding would not have rescued them, since a deployment
+  can sit months away from the nearest cluster. The common pattern does carry an event — the pilot
   contract deployed and initialised in the same ledger, 59,146,455 — but the
   tail is large enough to matter. **The plan must include each registered
   contract's deployment ledger explicitly.**
