@@ -211,6 +211,10 @@ can always be rebuilt from raw via `rederive` [P13].
   must match RPC event semantics (`EmitUnifiedEvents` + BeforeProtocol22),
   gated by a byte-equality test against an RPC-served range before trust
   [P5]. Ships as the `-full` image variant (needs stellar-core + disk).
+  Replaying a deep gap linearly is measured in weeks; `SPARSE-HEAL.md`
+  specifies how a heal replays only the stretches where a registered
+  contract could have produced a row, splitting the gap into replayed and
+  deferred ranges rather than attesting to anything it did not read.
 - **Catch-up awareness**: no tip-state stamping while behind [TW lesson 6].
 - Transient failures back off; they never exit the process [P24].
 
