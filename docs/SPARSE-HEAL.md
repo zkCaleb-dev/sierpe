@@ -47,6 +47,13 @@ Clustering the 9,222 active ledgers with a 10,000-ledger hole threshold gives
 90 h**, against 335 h linear. Wider thresholds are worse (50k → 99 h, 100k →
 113 h), which is what the 17,000-ledger break-even predicts.
 
+The plan actually computed for the pilot's 1,285 contracts — event ledgers
+unioned with deployment ledgers (§3), clustered at 10k with 300 ledgers of
+padding on each side — comes to **58 intervals over 649,788 ledgers, 10% of
+the range**: about 96 h on one worker, **48 h on two**. Padding accounts for
+34,800 of those ledgers and costs roughly two hours, which is the right price
+for the edge cases it absorbs.
+
 ## 2. The core idea: split the gap, never attest to it
 
 A gap is a recorded promise that a range is missing. Today the healer walks
@@ -111,15 +118,22 @@ produced a row. Two properties matter, and one of them is subtle:
   the event set**, and the hint reproduced the replayed ledger set exactly,
   with zero false negatives. That is empirical for this workload, not a
   theorem.
-- **A contract's own deployment is the known hole.** State changes derive from
-  `LedgerEntryTypeContractData` changes only — TTL entries are never
-  extracted, so a bare `extendFootprintTTL` produces nothing and needs no
-  hint. But the creation of a contract's instance at deploy time, and the
-  restore of an archived entry, *are* contract-data changes and may carry no
-  event. The validation window could not exercise this: all three pilot
-  contracts were deployed before it. **The plan should therefore include each
-  registered contract's deployment ledger explicitly**, which the operator can
-  read from the same source as the rest of the plan.
+- **A contract's own deployment is a real hole, and it was measured.** State
+  changes derive from `LedgerEntryTypeContractData` changes only — TTL entries
+  are never extracted, so a bare `extendFootprintTTL` produces nothing and
+  needs no hint. But the creation of a contract's instance at deploy time, and
+  the restore of an archived entry, *are* contract-data changes and may carry
+  no event. Across the 1,270 deployments found for the pilot's registered set,
+  **108 had no event anywhere in their deployment ledger**: an events-only plan
+  would have left 8.5% of the instance creations outside every interval, and
+  padding would not have rescued them, since a deployment can sit months away
+  from the nearest cluster. The common pattern does carry an event — the pilot
+  contract deployed and initialised in the same ledger, 59,146,455 — but the
+  tail is large enough to matter. **The plan must include each registered
+  contract's deployment ledger explicitly.**
+
+  Deployments above the RPC retention wall need no plan entry: that history is
+  inside the window the ordinary backfill walks.
 
 ### Scoping the hint to the registered set
 
@@ -181,11 +195,14 @@ ledgers. Cluster starts snap down to the enclosing checkpoint boundary and
 ends snap up to a checkpoint close (`checkpointFrequency = 64`), which also
 makes the resulting gap ids deterministic.
 
-Each cluster is padded by a configurable margin (a few hundred ledgers by
-default) before alignment. Padding is cheap — a few hundred ledgers cost
-seconds against an hour of spin-up — and absorbs edge effects in the hint. It
-does **not** rescue an activity that sits far from any cluster; that is what
-the deployment-ledger rule in §3 is for.
+Alignment is the endpoint's job, not the operator's: a plan carries the
+intervals where activity is believed to be, and the server snaps them. Each
+interval is padded by a configurable margin (a few hundred ledgers by default)
+before alignment; an operator whose plan is already padded sets the margin to
+zero rather than paying for it twice. Padding is cheap — a few hundred ledgers
+cost seconds against an hour of spin-up — and absorbs edge effects in the
+hint. It does **not** rescue an activity that sits far from any cluster; that
+is what the deployment-ledger rule in §3 is for.
 
 ### Workers
 
