@@ -446,3 +446,61 @@ func TestBackfillAnchoredPastTheTipWaitsInsteadOfFailing(t *testing.T) {
 		t.Errorf("backfill = %+v, want the walk done just below the target", bf)
 	}
 }
+
+// A batch paced to survive RPC rate limiting anchors across ledgers, and
+// anchors landing in DIFFERENT grid cells make two groups that descend one
+// cell apart forever. The trailing group asks each round for the cell the
+// leader scanned last round, so the download should happen once — the cache
+// serves the second. It missed on membership before this: the entry only
+// answers contracts the scan extracted for, and the two groups are disjoint.
+// Found live on a 1285-contract mainnet batch holding a steady 2x download
+// for twelve hours.
+func TestBackfillGroupsOneCellApartShareTheirScans(t *testing.T) {
+	src := &fakeChunkChain{oldest: 1, tip: 9000}
+	// CAAA leads in cell [6001..8000]; CBBB trails one cell above.
+	st := newFakeBackfillStore(job("CAAA", 1, 8000), job("CBBB", 1, 9000))
+	b := newTestBackfiller(src, st)
+
+	if !b.round(context.Background()) {
+		t.Fatal("first round did no work")
+	}
+	// Two distinct cells, so two scans: [8001..9000] for CBBB (5 batches of
+	// 200) and [6001..8000] for CAAA (10). Nothing to share yet.
+	first := src.calls()
+	if first != 15 {
+		t.Fatalf("first round calls = %d, want 15 (two distinct cells)", first)
+	}
+
+	// Now CBBB asks for [6001..8000] — exactly what CAAA just scanned.
+	if !b.round(context.Background()) {
+		t.Fatal("second round did no work")
+	}
+	// CBBB rides the cache; only CAAA's new cell [4001..6000] is fetched.
+	if got := src.calls() - first; got != 10 {
+		t.Errorf("second round fetched %d batches, want 10: the trailing group must ride the cache, not re-download the cell", got)
+	}
+	if bf := st.backfill("CBBB"); bf.NextTo != 6000 {
+		t.Errorf("CBBB next_to = %d, want 6000 (it committed the cached cell)", bf.NextTo)
+	}
+	if bf := st.backfill("CAAA"); bf.NextTo != 4000 {
+		t.Errorf("CAAA next_to = %d, want 4000", bf.NextTo)
+	}
+}
+
+// The cache must still refuse a contract the scan did not extract for, or a
+// walk would commit an empty chunk as covered.
+func TestBackfillCacheRefusesAStrangerToTheScan(t *testing.T) {
+	src := &fakeChunkChain{oldest: 1, tip: 9000}
+	st := newFakeBackfillStore(job("CAAA", 1, 8000))
+	b := newTestBackfiller(src, st)
+	if !b.round(context.Background()) {
+		t.Fatal("round did no work")
+	}
+	rng := chunkRange{from: 6001, to: 8000}
+	stranger := []store.Contract{{
+		Network: "testnet", ContractID: "CZZZ", Kinds: []string{store.KindEvents},
+	}}
+	if _, ok := b.cachedScan(rng, stranger); ok {
+		t.Error("the cache served a contract that was never part of the scan")
+	}
+}
