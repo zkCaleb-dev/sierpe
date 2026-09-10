@@ -123,7 +123,10 @@ Pacing has one consequence worth knowing. A registration anchors its
 history walk at the cursor as it stands, so a batch spread over minutes
 anchors across several ledgers, and walks landing in different cells of
 the 2000-ledger chunk grid form separate groups that descend one cell
-apart and never merge. They still share their downloads: a group scans
+apart. Nothing brings such groups back together — they merge only by
+accident, when a transient failure costs the leading group a round and
+the trailing one lands on its cell — so plan for the split rather than
+waiting it out. They do share their downloads: a group scans
 the cell the group above it will ask for next round, and that one takes
 it from the scan cache instead of fetching it again. A split batch
 therefore costs the window once, not once per group.

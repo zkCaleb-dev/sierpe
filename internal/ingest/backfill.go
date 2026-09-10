@@ -176,6 +176,11 @@ func (b *Backfiller) round(ctx context.Context) bool {
 		// groups a cell apart never share a byte: they ask for the same
 		// ranges one round apart and miss on membership every time, which
 		// is what a batch registered over minutes always produces.
+		//
+		// Nothing here merges such groups. They collapse into one only by
+		// accident, when a round returns false for the leading group and
+		// the trailing one advances onto its cell, so a walk cannot be
+		// left to converge on its own.
 		nextRound := groups[from+backfillChunkSize]
 		if b.processGroup(ctx, chunkRange{from: from, to: tops[from]}, groups[from], nextRound) {
 			worked = true
