@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-09-10
+
 ### Fixed
 
 - Recording a gap now rewinds every open gap it touches to owe its whole
