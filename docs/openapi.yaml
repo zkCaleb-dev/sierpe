@@ -944,7 +944,18 @@ components:
         cursor_sequence: { type: integer }
         latest_known_ledger: { type: integer }
         tip_lag_seconds: { type: number }
-        open_gaps: { type: integer }
+        open_gaps:
+          type: integer
+          description: >
+            Unresolved gaps, deferred ones included. This does not reach
+            zero once a heal plan defers anything: use gaps_pending_heal to
+            decide whether history is complete.
+        gaps_pending_heal:
+          type: integer
+          description: >
+            Open gaps the healer still owes (open_gaps minus deferred_gaps).
+            Zero means every range the instance intends to replay has been
+            replayed; deferred ranges stay declared and are not counted.
         deferred_gaps:
           type: integer
           description: >

@@ -72,7 +72,7 @@ func NewMetrics() *Metrics {
 		}),
 		OpenGaps: factory.NewGauge(prometheus.GaugeOpts{
 			Name: "sierpe_open_gaps",
-			Help: "Unresolved coverage gaps recorded in the database.",
+			Help: "Unresolved coverage gaps recorded in the database, deferred ones included.",
 		}),
 		DeferredGaps: factory.NewGauge(prometheus.GaugeOpts{
 			Name: "sierpe_deferred_gaps",
@@ -236,6 +236,7 @@ type Status struct {
 	LatestKnown      uint32    `json:"latest_known_ledger"`
 	TipLagSeconds    float64   `json:"tip_lag_seconds"`
 	OpenGaps         int64     `json:"open_gaps"`
+	GapsPendingHeal  int64     `json:"gaps_pending_heal"`
 	DeferredGaps     int64     `json:"deferred_gaps"`
 	DeferredLedgers  int64     `json:"deferred_ledgers"`
 	SourceFailovers  int64     `json:"source_failovers"`
@@ -273,6 +274,21 @@ func (s *State) Observe(cursor, latest uint32, tipLag time.Duration) {
 // SetOpenGaps, SetFailovers, and SetPendingBackfills feed the slower-moving
 // counters.
 func (s *State) SetOpenGaps(n int64) { s.openGaps.Store(n) }
+
+// gapsPendingHeal is the open gaps the healer still owes, which is the
+// number an operator means by "is it done yet". open_gaps stops reaching
+// zero the moment a heal plan defers anything, so a consumer that watched
+// it for completion would wait forever; serving the subtraction is what
+// keeps that from being something everybody has to rediscover.
+//
+// The two counters are polled separately, so a reading taken between them
+// can disagree by a gap; the floor keeps it from going negative.
+func (s *State) gapsPendingHeal() int64 {
+	if n := s.openGaps.Load() - s.deferredGaps.Load(); n > 0 {
+		return n
+	}
+	return 0
+}
 
 // SetDeferredGaps records the deferred share of the open gaps: ranges a heal
 // plan decided not to replay. They are open and declared like any other gap,
@@ -346,6 +362,7 @@ func (s *Server) snapshot() Status {
 		LatestKnown:      s.state.latestKnown.Load(),
 		TipLagSeconds:    float64(s.state.tipLagMilli.Load()) / 1000,
 		OpenGaps:         s.state.openGaps.Load(),
+		GapsPendingHeal:  s.state.gapsPendingHeal(),
 		DeferredGaps:     s.state.deferredGaps.Load(),
 		DeferredLedgers:  s.state.deferredLedgers.Load(),
 		SourceFailovers:  s.state.failovers.Load(),

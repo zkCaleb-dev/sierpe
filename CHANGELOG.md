@@ -23,6 +23,14 @@ All notable changes to Sierpe are documented here. The format follows
   deferred share out of the open-gap count, so a plan does not read as
   damage. See `docs/SPARSE-HEAL.md`.
 
+  **Operators watching `open_gaps` for completion must switch to
+  `gaps_pending_heal`.** Deferred gaps stay open on purpose, so once a plan
+  is applied `open_gaps` no longer reaches zero and anything checking
+  `open_gaps == 0` waits forever without erroring. `/status` now serves
+  `gaps_pending_heal` (open minus deferred) and the equivalent for
+  Prometheus is `sierpe_open_gaps - sierpe_deferred_gaps`. Instances that
+  never apply a plan are unaffected.
+
 ## [1.9.0] - 2026-09-08
 
 ### Fixed
