@@ -220,12 +220,15 @@ with ~1.6 GB of other services therefore supports **one** worker: two would
 want 15–20 GB of core alone, and being killed mid-chunk costs the whole
 chunk's replay, which can be a day of work.
 
-That footprint does not shrink with smaller clusters. A catchup's memory is
-dominated by the bucket state of its anchor checkpoint, which is the size of
-the network, not the length of the range being replayed — so a 10,000-ledger
-cluster costs about what a 500,000-ledger chunk costs. Deep checkpoints are
-somewhat cheaper because the network was smaller then, but that is a
-property of how far back the cluster sits, not of its width.
+That footprint does not shrink with smaller clusters, which is the tempting
+way to fit a second worker. A catchup's memory is dominated by the bucket
+state of its anchor checkpoint — the size of the network, not the length of
+the range being replayed — so a 10,000-ledger cluster costs about what a
+500,000-ledger chunk costs. The measurement that settles it is the
+equivalence gate: it replays **eight ledgers**, and the pilot watched its
+core reach **6.5 GB** doing so. Deep checkpoints are somewhat cheaper
+because the network was smaller then, but that is a property of how far back
+a cluster sits, not of how wide it is.
 
 At the pilot's numbers, 57 clusters take about 96 h on the one worker its
 host can afford. Two workers would halve that; on this hardware that is a
