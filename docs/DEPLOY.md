@@ -18,6 +18,7 @@ appliance; pick the one that matches your infrastructure.
 | `HISTORY_ARCHIVE_URLS` | no | History archives for the archive leg. Defaults to the SDF public archives. |
 | `CAPTIVE_STORAGE_PATH` | no | Scratch space for captive core buckets (disposable). Defaults to the OS temp dir. |
 | `HEAL_CHUNK_LEDGERS` | no | Ledgers per atomic heal chunk (default 100000, min 64). Every chunk is a fresh captive core run that re-downloads its checkpoint's bucket set, so larger chunks amortize a fixed multi-minute download; the chunk's records are held in memory until its single commit, so very large values trade RAM and lost replay work on a crash. Raise it on slow links healing deep gaps. |
+| `HEAL_WORKERS` | no | Gaps replayed at once (default 1, max 16). Each worker runs its own captive core, so the ceiling is memory, not CPU: budget **~10 GB per worker** against the machine's **total** RAM minus everything else it runs — not the free memory of the moment, which looks generous until the peak arrives. A 16 GB host running anything else affords one worker. Being killed mid-chunk costs that chunk's whole replay. It also only pays off with several open gaps to spread across, which is what a sparse heal plan produces; a single gap is healed by a single worker either way. |
 
 Operational truths that apply everywhere:
 
@@ -115,8 +116,11 @@ What to know before enabling it:
   (`archive: verified`); a divergence disables healing and raises
   `sierpe_archive_equivalence_failures_total` instead of storing
   unverified data.
-- Heals commit in atomic 2000-ledger chunks; watch
-  `sierpe_healed_ledgers_total` and `open_gaps` drain in `/status`.
+- Heals commit in atomic chunks of `HEAL_CHUNK_LEDGERS` (default 100000);
+  watch `sierpe_healed_ledgers_total` and `open_gaps` drain in `/status`.
+  On a deep gap and a slow link, raise the chunk size and consider
+  `HEAL_WORKERS` — the reasoning behind both is in
+  [SPARSE-HEAL.md](SPARSE-HEAL.md).
 
 ## Observability
 

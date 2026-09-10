@@ -64,6 +64,12 @@ func TestLoadArchiveLeg(t *testing.T) {
 	if !strings.Contains(cfg.Redacted(), "heal_chunk=default") {
 		t.Errorf("Redacted() must show the default heal chunk, got %s", cfg.Redacted())
 	}
+	if cfg.HealWorkers != 0 {
+		t.Errorf("HealWorkers = %d, want 0 (healer default) when unset", cfg.HealWorkers)
+	}
+	if !strings.Contains(cfg.Redacted(), "heal_workers=default") {
+		t.Errorf("Redacted() must show the default worker count, got %s", cfg.Redacted())
+	}
 
 	m["HEAL_CHUNK_LEDGERS"] = "500000"
 	cfg, err = Load(env(m))
@@ -75,6 +81,18 @@ func TestLoadArchiveLeg(t *testing.T) {
 	}
 	if !strings.Contains(cfg.Redacted(), "heal_chunk=500000") {
 		t.Errorf("Redacted() must show the configured heal chunk, got %s", cfg.Redacted())
+	}
+
+	m["HEAL_WORKERS"] = "2"
+	cfg, err = Load(env(m))
+	if err != nil {
+		t.Fatalf("Load() with HEAL_WORKERS error = %v", err)
+	}
+	if cfg.HealWorkers != 2 {
+		t.Errorf("HealWorkers = %d, want 2", cfg.HealWorkers)
+	}
+	if !strings.Contains(cfg.Redacted(), "heal_workers=2") {
+		t.Errorf("Redacted() must show the configured worker count, got %s", cfg.Redacted())
 	}
 }
 
@@ -108,6 +126,19 @@ func TestLoadErrors(t *testing.T) {
 			m["STELLAR_CORE_BINARY"] = "/bin/ls"
 			m["HEAL_CHUNK_LEDGERS"] = "63"
 		}, "HEAL_CHUNK_LEDGERS"},
+		{"heal workers without core", func(m map[string]string) { m["HEAL_WORKERS"] = "2" }, "STELLAR_CORE_BINARY is not"},
+		{"heal workers not a number", func(m map[string]string) {
+			m["STELLAR_CORE_BINARY"] = "/bin/ls"
+			m["HEAL_WORKERS"] = "many"
+		}, "HEAL_WORKERS"},
+		{"heal workers below one", func(m map[string]string) {
+			m["STELLAR_CORE_BINARY"] = "/bin/ls"
+			m["HEAL_WORKERS"] = "0"
+		}, "HEAL_WORKERS"},
+		{"heal workers above the cap", func(m map[string]string) {
+			m["STELLAR_CORE_BINARY"] = "/bin/ls"
+			m["HEAL_WORKERS"] = "64"
+		}, "HEAL_WORKERS"},
 		{"bad archive url", func(m map[string]string) {
 			m["STELLAR_CORE_BINARY"] = "/bin/ls"
 			m["HISTORY_ARCHIVE_URLS"] = "not a url"

@@ -208,13 +208,28 @@ is what the deployment-ledger rule in §3 is for.
 
 `HEAL_WORKERS` (default 1) lets an operator replay several gaps
 concurrently. Each worker takes a distinct gap; two workers never share one.
-Sizing is the operator's call and RAM is the binding constraint — the pilot
-measured 9.8 GB peak per captive core, so 16 GB of host memory supports two.
 The equivalence gate (P5) stays a once-per-process affair and runs before any
-worker commits.
+worker starts.
 
-At the pilot's numbers, 57 clusters on two workers is about 45 h — under two
-days for what linear replay would spend two weeks on.
+**RAM is the binding constraint, and the sum is over the whole machine.**
+Each worker is a captive core; the pilot measured one at **7.6 GB resident
+at rest and 9.8 GB at peak**. The budget is total host memory minus
+everything else the machine runs — not the free memory of the moment, which
+looks generous right up until the peak arrives. The pilot's 15.4 GB host
+with ~1.6 GB of other services therefore supports **one** worker: two would
+want 15–20 GB of core alone, and being killed mid-chunk costs the whole
+chunk's replay, which can be a day of work.
+
+That footprint does not shrink with smaller clusters. A catchup's memory is
+dominated by the bucket state of its anchor checkpoint, which is the size of
+the network, not the length of the range being replayed — so a 10,000-ledger
+cluster costs about what a 500,000-ledger chunk costs. Deep checkpoints are
+somewhat cheaper because the network was smaller then, but that is a
+property of how far back the cluster sits, not of its width.
+
+At the pilot's numbers, 57 clusters take about 96 h on the one worker its
+host can afford. Two workers would halve that; on this hardware that is a
+memory upgrade, not a configuration change.
 
 ### Observability
 

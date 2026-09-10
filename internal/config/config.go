@@ -13,6 +13,11 @@ import (
 	"strings"
 )
 
+// maxHealWorkers bounds HEAL_WORKERS. Every worker is a captive core
+// holding gigabytes of bucket state, so a typo here does not cost a slow
+// heal, it costs the host.
+const maxHealWorkers = 16
+
 // Network identifies the Stellar network this instance indexes.
 type Network string
 
@@ -81,6 +86,12 @@ type Config struct {
 	// CaptiveStoragePath is where captive core keeps its bucket data.
 	// Contents are disposable (re-downloaded on demand).
 	CaptiveStoragePath string
+	// HealWorkers is how many gaps the healer replays at once. Each worker
+	// runs its own captive core, so the binding constraint is host memory
+	// (roughly 10 GB per core in the mainnet pilot), not CPU. It only pays
+	// off with several open gaps to spread across — a single gap is healed
+	// by a single worker either way. Zero means one.
+	HealWorkers int
 	// HealChunkLedgers is how many ledgers one atomic heal chunk covers.
 	// Each chunk is a fresh captive core run that re-downloads its anchor
 	// checkpoint's bucket set, so the size amortizes a fixed multi-minute
@@ -199,6 +210,17 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 		}
 		cfg.CaptiveStoragePath = p
 	}
+	if raw, ok := lookup("HEAL_WORKERS"); ok && raw != "" {
+		if cfg.CoreBinary == "" {
+			errs = append(errs, "HEAL_WORKERS is set but STELLAR_CORE_BINARY is not; the archive leg needs both")
+		}
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 || v > maxHealWorkers {
+			errs = append(errs, fmt.Sprintf("HEAL_WORKERS %q must be an integer between 1 and %d", raw, maxHealWorkers))
+		} else {
+			cfg.HealWorkers = v
+		}
+	}
 	if raw, ok := lookup("HEAL_CHUNK_LEDGERS"); ok && raw != "" {
 		if cfg.CoreBinary == "" {
 			errs = append(errs, "HEAL_CHUNK_LEDGERS is set but STELLAR_CORE_BINARY is not; the archive leg needs both")
@@ -289,8 +311,12 @@ func (c *Config) Redacted() string {
 		if c.HealChunkLedgers != 0 {
 			healChunk = strconv.FormatUint(uint64(c.HealChunkLedgers), 10)
 		}
-		archive = fmt.Sprintf("core=%s archives=[%s] heal_chunk=%s",
-			c.CoreBinary, strings.Join(archiveHosts, " "), healChunk)
+		healWorkers := "default"
+		if c.HealWorkers != 0 {
+			healWorkers = strconv.Itoa(c.HealWorkers)
+		}
+		archive = fmt.Sprintf("core=%s archives=[%s] heal_chunk=%s heal_workers=%s",
+			c.CoreBinary, strings.Join(archiveHosts, " "), healChunk, healWorkers)
 	}
 	basicAuth := "off"
 	if c.BasicAuthEnabled() {
