@@ -459,3 +459,49 @@ func TestReRegisteringUnchangedLeavesThePlanAlone(t *testing.T) {
 		t.Errorf("DeferredGaps() = %d, %v, want 0: extending the walk is new history", n, err)
 	}
 }
+
+// Registering a contract that reaches history healed before it existed
+// rewinds that gap, so the operator has a supported way to re-promise a
+// band an earlier heal derived for somebody else — extend the walk and the
+// range comes back, with no hand-written UPDATE.
+func TestRegisteringDeeperRewindsAHealedPrefix(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gaps, backfill, contracts, events`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	gap := seedGap(t, s, 58_000_000, 64_210_263)
+	if err := s.CommitHealChunk(ctx, "testnet", gap, 63_698_263, false,
+		nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitHealChunk() error = %v", err)
+	}
+	// A registration already on file, asking for nothing new later on.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 58_000_000, 64_300_000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() error = %v", err)
+	}
+	gaps := allGaps(t, s)
+	if len(gaps) != 1 || gaps[0].HealNextTo != 64_210_263 {
+		t.Fatalf("a new registration must rewind the healed prefix: %+v", gaps)
+	}
+
+	// Heal it partway down again, then re-register the same contract
+	// unchanged: nothing new is asked for, so nothing is disturbed.
+	if err := s.CommitHealChunk(ctx, "testnet", gaps[0], 63_000_000, false,
+		nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitHealChunk() second error = %v", err)
+	}
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 58_000_000, 64_300_000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() re-run error = %v", err)
+	}
+	if g := allGaps(t, s); g[0].HealNextTo != 63_000_000 {
+		t.Errorf("a no-op re-registration rewound the watermark to %d; it must leave progress alone", g[0].HealNextTo)
+	}
+
+	// Extending the walk deeper does ask for new history, so it rewinds.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 57_000_000, 64_300_000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() extend error = %v", err)
+	}
+	if g := allGaps(t, s); g[0].HealNextTo != 64_210_263 {
+		t.Errorf("extending the walk did not rewind the healed prefix: %+v", g)
+	}
+}

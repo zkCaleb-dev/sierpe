@@ -20,6 +20,13 @@ All notable changes to Sierpe are documented here. The format follows
   one. Found before it cost anything, on a mainnet instance whose band
   held 45% of the known activity of the 1,285 contracts about to clamp
   over it, and half their deployments.
+- Registering a contract that reaches history healed before it existed
+  now rewinds that gap too, not only the deferred ones. Both are the same
+  rule — a plan skipped ranges without knowing about this contract, and a
+  heal derived rows without knowing about it either — and it gives an
+  operator a supported way to re-promise a band an earlier heal derived
+  for somebody else: extend the walk and the range comes back, with no
+  hand-written UPDATE against the tables.
 - Re-registering a contract that asks for nothing new no longer reopens
   the deferred gaps covering it. Reconciling the same registration twice
   is defined as a no-op, and re-running a registration script is exactly

@@ -81,12 +81,13 @@ var ErrNoBackfill = errors.New("store: no backfill for contract")
 // moving frontier. That is conservative, never a lie, and it heals as the
 // walk descends; the alternative (two watermarks) buys precision during a
 // rare operation at the cost of a second thing that can be wrong.
-// A registration that asks for history it did not have before also
-// invalidates every deferred gap covering it: those deferrals came from a
-// plan computed for a contract set that did not include this one, so the
-// ranges go back to the healer rather than staying unread on the strength
-// of a hint that never looked (docs/SPARSE-HEAL.md §3). An operator who
-// wants the sparse behaviour for the new contract submits a new plan.
+// A registration that asks for history it did not have before also hands
+// every open gap covering that history back to the healer in full: deferred
+// ranges because the plan that skipped them was computed without this
+// contract, and already-healed stretches because they were derived against
+// a registry that did not include it either (docs/SPARSE-HEAL.md §3). An
+// operator who wants the sparse behaviour for the new contract submits a
+// new plan afterwards.
 //
 // A re-registration that asks for nothing new leaves the deferrals alone.
 // Reconciling the same contract twice must be a genuine no-op (rule 11):
@@ -102,7 +103,7 @@ func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, 
 			if nextTo < targetFrom {
 				return nil
 			}
-			_, err := ReopenDeferredGaps(ctx, tx, network, targetFrom, nextTo)
+			_, err := ReopenGaps(ctx, tx, network, targetFrom, nextTo)
 			return err
 		}
 

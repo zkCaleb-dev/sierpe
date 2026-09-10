@@ -162,23 +162,33 @@ func splitGap(ctx context.Context, tx pgx.Tx, network string, g Gap, pieces []pi
 	return nil
 }
 
-// ReopenDeferredGaps turns every deferred gap overlapping [from, to] back
-// into a replay gap, inside the caller's transaction.
+// ReopenGaps hands every open gap overlapping [from, to] back to the healer
+// in full, inside the caller's transaction: deferred ranges go back to
+// replay, and a gap that has already healed part of itself is rewound to owe
+// all of itself again.
 //
-// A plan is only valid for the contract set it was computed from, so
-// registering a contract invalidates the deferrals covering its history: the
-// hint that justified them never looked for this contract. Overlapping gaps
-// are reopened whole rather than re-partitioned — replaying more than the
-// plan asked for is wasted time, replaying less would be a silent hole.
-func ReopenDeferredGaps(ctx context.Context, tx pgx.Tx, network string, from, to uint32) (int64, error) {
+// Both halves are the same rule. A plan is only valid for the contract set
+// it was computed from, and a heal derives rows only for the registry as it
+// stood when it ran — so a contract registering now is owed both the ranges
+// a hint skipped on its behalf and the ranges healed before it existed.
+// Overlapping gaps are reopened whole rather than re-partitioned: replaying
+// more than asked is wasted time, replaying less is a silent hole.
+//
+// Rewinding in place keeps gap identity and ranges intact. Promising the
+// healed stretch as a separate row would overlap the gap it came from, which
+// is exactly what the subtraction in RecordGap exists to prevent.
+func ReopenGaps(ctx context.Context, tx pgx.Tx, network string, from, to uint32) (int64, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE gaps SET heal_mode = $4
-		WHERE network = $1 AND resolved_at IS NULL AND heal_mode = $5
-		  AND from_sequence <= $3 AND to_sequence >= $2`,
+		UPDATE gaps
+		SET heal_mode = $4,
+		    heal_next_to = to_sequence
+		WHERE network = $1 AND resolved_at IS NULL
+		  AND from_sequence <= $3 AND to_sequence >= $2
+		  AND (heal_mode = $5 OR heal_next_to IS DISTINCT FROM to_sequence)`,
 		network, int64(from), int64(to), HealModeReplay, HealModeDeferred,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("store: reopen deferred gaps: %w", err)
+		return 0, fmt.Errorf("store: reopen gaps: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
