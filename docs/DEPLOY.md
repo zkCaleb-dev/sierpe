@@ -119,6 +119,17 @@ None of that costs anything, because registration reconciles rather than
 inserts (admin doctrine, rule 11): **retry freely, and count what
 `GET /v1/contracts` returns rather than what your script counted.**
 
+Pacing has one cost worth knowing. A registration anchors its history
+walk at the cursor as it stands, so a batch spread over minutes anchors
+across several ledgers — and walks that land in different cells of the
+2000-ledger chunk grid form **separate groups that never merge**. They
+descend in lockstep one cell apart, each downloading a range the other
+already fetched, so a split batch pays for the window roughly once per
+group. The pilot measured a 1,285-contract batch splitting into two
+groups and holding a steady 2x download for the whole walk. It is
+correctness-neutral — every contract gets its history — and it is
+bandwidth you paid for twice.
+
 ## The archive leg (`-full` image)
 
 The slim image clamps honestly at the RPC retention wall and records the
