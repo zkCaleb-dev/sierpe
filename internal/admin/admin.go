@@ -36,6 +36,21 @@ const registrationAnchorMargin = 20
 
 const maxBodyBytes = 64 << 10
 
+// Heal plans are the one admin body that is not tiny: one interval per
+// cluster of contract activity, which for a fleet spread over years is
+// thousands of them. The interval cap is what keeps the partition bounded;
+// the byte cap only has to be generous enough to carry it.
+const (
+	maxPlanBodyBytes = 4 << 20
+	maxPlanIntervals = 20000
+	// defaultPlanPadding widens each interval when the caller says nothing.
+	// A few hundred ledgers cost seconds of replay against an hour of
+	// captive core spin-up, and absorb edge effects in whatever produced
+	// the plan (docs/SPARSE-HEAL.md §4).
+	defaultPlanPadding = 300
+	maxPlanPadding     = 1 << 20
+)
+
 // contractStore is the slice of the store the admin API consumes.
 type contractStore interface {
 	UpsertContract(ctx context.Context, c store.Contract) (store.Contract, error)
@@ -47,6 +62,11 @@ type contractStore interface {
 type backfillPlanner interface {
 	LoadCursor(ctx context.Context, network string) (store.Cursor, error)
 	EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32, kinds []string) error
+}
+
+// healPlanner reconciles the open gaps against a replay plan.
+type healPlanner interface {
+	PlanHeal(ctx context.Context, network string, replay []store.Interval, padding uint32) (store.PlanResult, error)
 }
 
 // reloader republishes the registry snapshot after a mutation.
@@ -65,20 +85,24 @@ type Server struct {
 	token      string
 	store      contractStore
 	planner    backfillPlanner
+	heal       healPlanner
 	registry   reloader
 	classifier classifier
 	log        *slog.Logger
 }
 
 // NewServer wires the admin API. All collaborators are required.
-func NewServer(network, token string, st contractStore, planner backfillPlanner, reg reloader, cls classifier, log *slog.Logger) *Server {
-	return &Server{network: network, token: token, store: st, planner: planner, registry: reg, classifier: cls, log: log}
+func NewServer(network, token string, st contractStore, planner backfillPlanner, heal healPlanner,
+	reg reloader, cls classifier, log *slog.Logger) *Server {
+	return &Server{network: network, token: token, store: st, planner: planner, heal: heal,
+		registry: reg, classifier: cls, log: log}
 }
 
 // Register mounts the admin routes onto mux.
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/contracts", s.auth(s.handleRegister))
 	mux.Handle("DELETE /v1/contracts/{id}", s.auth(s.handleDelete))
+	mux.Handle("POST /v1/admin/gaps/plan", s.auth(s.handlePlan))
 }
 
 // auth admits requests carrying the admin bearer token. The comparison is
@@ -301,6 +325,71 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	s.reloadRegistry(r.Context())
 	s.log.Info("contract unregistered", "contract_id", id, "existed", existed)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// planRequest is the POST /v1/admin/gaps/plan body: the ranges the operator
+// wants replayed. Everything else still missing becomes a deferred gap.
+type planRequest struct {
+	Replay []store.Interval `json:"replay"`
+	// Padding widens every interval on both sides before the ranges are
+	// snapped to checkpoints. A plan that arrives already padded sets it to
+	// zero rather than paying for the margin twice.
+	Padding *uint32 `json:"padding"`
+}
+
+func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxPlanBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	var req planRequest
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON body: %v", err))
+		return
+	}
+	// An empty plan would defer every open gap at once. That is a real
+	// decision, not a typo-shaped one, so it has to be spelled out rather
+	// than arrived at by posting an empty body.
+	if len(req.Replay) == 0 {
+		writeError(w, http.StatusBadRequest,
+			"replay must list at least one interval; a plan that replays nothing would defer every open gap")
+		return
+	}
+	if len(req.Replay) > maxPlanIntervals {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("replay has %d intervals (max %d); merge the ones separated by less than a heal spin-up",
+				len(req.Replay), maxPlanIntervals))
+		return
+	}
+	for i, iv := range req.Replay {
+		if iv.From == 0 || iv.To < iv.From {
+			writeError(w, http.StatusBadRequest,
+				fmt.Sprintf("replay[%d] {from:%d,to:%d} is not a ledger range (from must be >= 1 and to >= from)",
+					i, iv.From, iv.To))
+			return
+		}
+	}
+	padding := uint32(defaultPlanPadding)
+	if req.Padding != nil {
+		if *req.Padding > maxPlanPadding {
+			writeError(w, http.StatusBadRequest,
+				fmt.Sprintf("padding %d is above the %d ledger maximum", *req.Padding, maxPlanPadding))
+			return
+		}
+		padding = *req.Padding
+	}
+
+	res, err := s.heal.PlanHeal(r.Context(), s.network, req.Replay, padding)
+	if err != nil {
+		s.log.Error("heal plan failed", "intervals", len(req.Replay), "err", err)
+		writeError(w, http.StatusInternalServerError, "planning failed; see server logs")
+		return
+	}
+	s.log.Info("heal plan applied",
+		"intervals", len(req.Replay), "padding", padding,
+		"replay_gaps", res.ReplayGaps, "deferred_gaps", res.DeferredGaps,
+		"replay_ledgers", res.ReplayLedgers, "deferred_ledgers", res.DeferredLedgers)
+	writeJSON(w, http.StatusOK, res)
 }
 
 // reloadRegistry refreshes the snapshot after a committed mutation. Failure

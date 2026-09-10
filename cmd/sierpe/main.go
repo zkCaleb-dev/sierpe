@@ -177,7 +177,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 	state := &health.State{}
 	mux := http.NewServeMux()
 	health.NewServer(version, string(cfg.Network), state, metrics).Register(mux)
-	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, st, reg, registry.NewClassifier(src), log).Register(mux)
+	admin.NewServer(string(cfg.Network), cfg.AdminToken, st, st, st, reg, registry.NewClassifier(src), log).Register(mux)
 	publicAPI := api.NewServer(string(cfg.Network), st, st, log)
 	publicAPI.Register(mux)
 	publicAPI.RegisterState(mux, st)
@@ -312,6 +312,11 @@ func feedStatus(ctx context.Context, st *store.Store, state *health.State, metri
 		if n, err := st.OpenGaps(ctx, network); err == nil {
 			state.SetOpenGaps(n)
 			metrics.OpenGaps.Set(float64(n))
+		}
+		if gaps, ledgers, err := st.DeferredGaps(ctx, network); err == nil {
+			state.SetDeferredGaps(gaps, ledgers)
+			metrics.DeferredGaps.Set(float64(gaps))
+			metrics.DeferredLedgers.Set(float64(ledgers))
 		}
 		if n, err := st.CountPendingBackfills(ctx, network); err == nil {
 			state.SetPendingBackfills(n)

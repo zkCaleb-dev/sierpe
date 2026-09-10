@@ -9,25 +9,48 @@ import (
 )
 
 // Gap is one recorded range of unserved history. HealNextTo is the heal
-// watermark: the highest ledger still missing (To when untouched).
+// watermark: the highest ledger still missing (To when untouched). HealMode
+// says whether the healer owns the range or the range is deliberately not
+// being replayed (docs/SPARSE-HEAL.md).
 type Gap struct {
 	ID         string
 	From       uint32
 	To         uint32
 	Reason     string
 	HealNextTo uint32
+	HealMode   string
 	RecordedAt time.Time
 }
 
-// ListOpenGaps returns unresolved gaps, most recent history first — the
-// same recent-first order the backfill walks, because fresh history is
-// worth more to consumers than deep history.
+// scanGap reads one gap row in the column order every gap query uses.
+func scanGap(row pgx.Row) (Gap, error) {
+	var g Gap
+	var from, to int64
+	var healNextTo *int64
+	if err := row.Scan(&g.ID, &from, &to, &g.Reason, &healNextTo, &g.HealMode, &g.RecordedAt); err != nil {
+		return Gap{}, fmt.Errorf("store: scan gap: %w", err)
+	}
+	g.From, g.To = uint32(from), uint32(to)
+	g.HealNextTo = g.To
+	if healNextTo != nil {
+		g.HealNextTo = uint32(*healNextTo)
+	}
+	return g, nil
+}
+
+// ListOpenGaps returns the unresolved gaps the healer owns, most recent
+// history first — the same recent-first order the backfill walks, because
+// fresh history is worth more to consumers than deep history.
+//
+// Deferred gaps are excluded: they stay open and declared, but replaying
+// them is exactly what a plan decided not to do. Everything that reports
+// coverage still counts them (rule 7).
 func (s *Store) ListOpenGaps(ctx context.Context, network string) ([]Gap, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, from_sequence, to_sequence, reason, heal_next_to, recorded_at
+		SELECT id, from_sequence, to_sequence, reason, heal_next_to, heal_mode, recorded_at
 		FROM gaps
-		WHERE network = $1 AND resolved_at IS NULL
-		ORDER BY to_sequence DESC`, network)
+		WHERE network = $1 AND resolved_at IS NULL AND heal_mode = $2
+		ORDER BY to_sequence DESC`, network, HealModeReplay)
 	if err != nil {
 		return nil, fmt.Errorf("store: list open gaps: %w", err)
 	}
@@ -35,16 +58,9 @@ func (s *Store) ListOpenGaps(ctx context.Context, network string) ([]Gap, error)
 
 	var out []Gap
 	for rows.Next() {
-		var g Gap
-		var from, to int64
-		var healNextTo *int64
-		if err := rows.Scan(&g.ID, &from, &to, &g.Reason, &healNextTo, &g.RecordedAt); err != nil {
-			return nil, fmt.Errorf("store: scan gap: %w", err)
-		}
-		g.From, g.To = uint32(from), uint32(to)
-		g.HealNextTo = g.To
-		if healNextTo != nil {
-			g.HealNextTo = uint32(*healNextTo)
+		g, err := scanGap(rows)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, g)
 	}

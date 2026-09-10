@@ -236,9 +236,19 @@ memory upgrade, not a configuration change.
 `/status` and `/metrics` must separate the two kinds of open gap, or an
 operator reads "58 open gaps" and concludes the heal is broken:
 
-- `sierpe_gaps_deferred` and `sierpe_deferred_ledgers` alongside the existing
+- `sierpe_deferred_gaps` and `sierpe_deferred_ledgers` alongside the existing
   open-gap counters;
-- `/status` reports deferred gaps and their ledger total as their own field.
+- `/status` reports deferred gaps and their ledger total as their own fields.
+
+The subtraction has to be served, not left to the reader. **Open gaps stop
+reaching zero the moment a plan defers anything**, and the obvious
+completion check — `open_gaps == 0` — then waits for a condition that can
+never occur again, without erroring. That is a silent failure in every
+watcher, alert and dashboard written before the plan existed. `/status`
+therefore carries `gaps_pending_heal` (open minus deferred) as its own
+field, and the metric docs name `sierpe_open_gaps - sierpe_deferred_gaps`
+as the completion signal. An instance that never plans anything is
+unaffected: its deferred count is zero and the two numbers agree.
 
 ## 5. What this does not change
 

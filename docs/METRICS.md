@@ -9,7 +9,18 @@ metric does not ship without a row here (CLAUDE.md verification rules).
 | `sierpe_tip_lag_seconds` | gauge | Age of the last committed ledger vs wall clock. | Sustained growth = falling behind. |
 | `sierpe_source_failovers_total` | counter | Times the RPC pool switched endpoints. | Bursts = unhealthy preferred endpoint. |
 | `sierpe_commit_duration_seconds` | histogram | Time to commit one ledger (cursor + continuity + events, one transaction). | p99 growth = database pressure. |
-| `sierpe_open_gaps` | gauge | Unresolved coverage gaps recorded in the database. | Any nonzero value is declared, unserved history. |
+| `sierpe_open_gaps` | gauge | Unresolved coverage gaps recorded in the database, deferred ones included. | Any nonzero value is declared, unserved history — but see the warning below before treating zero as done. |
+| `sierpe_deferred_gaps` | gauge | Open gaps a heal plan decided not to replay. A subset of `sierpe_open_gaps`. | Not an alert: it rises on purpose when a plan is applied. Alert on `sierpe_open_gaps - sierpe_deferred_gaps` staying flat while the archive leg is verified. |
+| `sierpe_deferred_ledgers` | gauge | Ledgers held by deferred gaps: recorded as missing, deliberately not replayed. | Not an alert. It is the size of the history a plan chose to leave unread; a drop means a registration or a wider plan handed ranges back to the healer. |
+
+> **`sierpe_open_gaps` reaching zero is not the completion signal.** Once a
+> heal plan defers anything, deferred gaps stay open on purpose and forever,
+> so anything watching `open_gaps == 0` for "history is complete" waits for a
+> condition that can no longer happen — and fails silently, since nothing
+> errors. The signal is **`sierpe_open_gaps - sierpe_deferred_gaps`**, served
+> ready-made as `gaps_pending_heal` in `/status`. Instances that never apply a
+> plan are unaffected: their deferred count is zero and the two agree.
+
 | `sierpe_events_extracted_total` | counter | Events from watched contracts committed to the store. | Zero while contracts are active = extraction problem. |
 | `sierpe_state_changes_extracted_total` | counter | Contract-data changes from watched contracts committed to the store. | Zero while state-kind contracts are active = extraction problem. |
 | `sierpe_transfers_extracted_total` | counter | Token transfers decoded from watched contracts and committed to the store. | Zero while transfers-kind contracts are active = decoder problem. |
