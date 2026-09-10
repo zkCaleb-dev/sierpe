@@ -165,6 +165,13 @@ func (b *Backfiller) round(ctx context.Context) bool {
 	// Highest cell first: a walk trailing another by one grid cell asks for
 	// the range scanned immediately before it, so it meets that scan in the
 	// cache instead of downloading the cell again.
+	//
+	// A consequence worth knowing before reading watermarks out of the
+	// table: the trailing group holds the higher cell, so it commits FIRST
+	// and lands on the watermark the leading group still carries. For the
+	// rest of that round the two read as equal. It is a phase of every
+	// round, not a merge, and a sample taken inside it looks exactly like
+	// one — it fooled the first operator to check.
 	sort.Slice(order, func(i, j int) bool { return order[i] > order[j] })
 	for _, from := range order {
 		if ctx.Err() != nil {
