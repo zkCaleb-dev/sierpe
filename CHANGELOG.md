@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-09-10
+
 ### Fixed
 
 - Recording a gap now subtracts the whole set of open gaps instead of
