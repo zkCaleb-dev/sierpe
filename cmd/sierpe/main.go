@@ -258,7 +258,7 @@ func run(log *slog.Logger, withIngestion bool) error {
 		}{metrics, state}
 		healer := ingest.NewHealer(
 			string(cfg.Network), cfg.Network.Passphrase(), archive, src, st, reg, healInst, log,
-			cfg.HealChunkLedgers,
+			cfg.HealChunkLedgers, cfg.HealWorkers,
 		)
 		go healer.Run(ctx)
 	}

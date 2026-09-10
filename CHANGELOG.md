@@ -6,6 +6,16 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `HEAL_WORKERS` replays several gaps at once (default 1, max 16). The
+  equivalence gate still runs exactly once, before any worker starts, so
+  no worker can commit a replay nobody proved; a gap is claimed while a
+  chunk of it is in flight, so two workers never replay the same range or
+  race on its watermark. Each worker is its own captive core, which makes
+  memory the binding constraint — about 10 GB per core in the mainnet
+  pilot — and it only pays off with several open gaps to spread across.
+
 ## [1.9.0] - 2026-09-08
 
 ### Fixed

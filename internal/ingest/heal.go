@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/stellar/go-stellar-sdk/xdr"
@@ -105,30 +106,67 @@ type Healer struct {
 	// held in memory until the single commit, so the size trades archive
 	// re-download overhead against RAM and lost replay work on a crash.
 	chunk uint32
+	// workers is how many gaps are replayed at once. Each worker runs its
+	// own captive core, so the ceiling is host memory, not cores.
+	workers int
+	// inFlight claims the gaps being healed right now. Two workers on one
+	// gap would replay the same range twice and race on its watermark, so
+	// a gap is claimed for as long as a chunk of it is in progress.
+	mu       sync.Mutex
+	inFlight map[string]bool
 }
 
 // NewHealer wires a Healer. All collaborators are required; chunkLedgers 0
-// means the default chunk size.
+// means the default chunk size and workers 0 means one.
 func NewHealer(network, passphrase string, archive healReplayer, rpc chunkSource,
-	st healStore, watch watchSource, inst healInstruments, log *slog.Logger, chunkLedgers uint32) *Healer {
+	st healStore, watch watchSource, inst healInstruments, log *slog.Logger,
+	chunkLedgers uint32, workers int) *Healer {
 	if chunkLedgers == 0 {
 		chunkLedgers = defaultHealChunkLedgers
+	}
+	if workers < 1 {
+		workers = 1
 	}
 	return &Healer{
 		network: network, passphrase: passphrase,
 		archive: archive, rpc: rpc, store: st, watch: watch, inst: inst, log: log,
-		idle: healIdle, chunk: chunkLedgers,
+		idle: healIdle, chunk: chunkLedgers, workers: workers,
+		inFlight: make(map[string]bool),
 	}
 }
 
 // Run drives healing until ctx ends or the equivalence gate fails.
 // Transient failures idle and retry; only a proven divergence stops the
-// worker — and even that never exits the process (rule 10).
+// healer — and even that never exits the process (rule 10).
+//
+// The gate is proven once, before any worker starts, so a divergent replay
+// can never be committed by a worker that had not looked yet.
 func (h *Healer) Run(ctx context.Context) {
 	h.inst.SetArchiveState(ArchiveStateUnverified)
+	if !h.awaitVerified(ctx) {
+		return
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < h.workers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			h.work(ctx, id)
+		}(i)
+	}
+	wg.Wait()
+}
+
+// awaitVerified waits for the first gap worth healing and proves the captive
+// replay byte-equivalent to the RPC. It reports whether healing may proceed.
+//
+// The wait is what keeps the gate lazy: an instance with no gaps never spins
+// up a core at all. The proof happens exactly once per process, because the
+// replay configuration cannot drift while the process lives.
+func (h *Healer) awaitVerified(ctx context.Context) bool {
 	for {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		gaps, err := h.store.ListOpenGaps(ctx, h.network)
 		if err != nil {
@@ -136,56 +174,90 @@ func (h *Healer) Run(ctx context.Context) {
 				h.log.Warn("heal: listing gaps failed", "err", err)
 			}
 			if !sleepCtx(ctx, h.idle) {
-				return
+				return false
 			}
 			continue
 		}
 		if len(gaps) == 0 {
 			if !sleepCtx(ctx, h.idle) {
+				return false
+			}
+			continue
+		}
+		if err := h.verifyEquivalence(ctx); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			h.inst.IncEquivalenceFailures()
+			h.inst.SetArchiveState(ArchiveStateFailed)
+			h.log.Error("heal: DISABLED, captive replay is not equivalent to the RPC; "+
+				"gaps stay recorded rather than filled with unverified data",
+				"err", err)
+			return false
+		}
+		h.verified = true
+		h.inst.SetArchiveState(ArchiveStateVerified)
+		h.log.Info("heal: captive replay verified equivalent to the RPC", "workers", h.workers)
+		return true
+	}
+}
+
+// work heals one chunk at a time, claiming a gap no other worker holds.
+func (h *Healer) work(ctx context.Context, id int) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		gaps, err := h.store.ListOpenGaps(ctx, h.network)
+		if err != nil {
+			if ctx.Err() == nil {
+				h.log.Warn("heal: listing gaps failed", "worker", id, "err", err)
+			}
+			if !sleepCtx(ctx, h.idle) {
 				return
 			}
 			continue
 		}
-
-		// The gate runs lazily — no gaps means no core spin-up ever — and
-		// exactly once per process: the replay configuration cannot drift
-		// while the process lives.
-		if !h.verified {
-			if err := h.verifyEquivalence(ctx); err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				h.inst.IncEquivalenceFailures()
-				h.inst.SetArchiveState(ArchiveStateFailed)
-				h.log.Error("heal: DISABLED, captive replay is not equivalent to the RPC; "+
-					"gaps stay recorded rather than filled with unverified data",
-					"err", err)
+		gap, ok := h.claim(gaps)
+		if !ok {
+			// Nothing open, or every open gap already has a worker: with
+			// more workers than gaps the extras simply wait.
+			if !sleepCtx(ctx, h.idle) {
 				return
 			}
-			h.verified = true
-			h.inst.SetArchiveState(ArchiveStateVerified)
-			h.log.Info("heal: captive replay verified equivalent to the RPC")
+			continue
 		}
-
-		worked := false
-		for _, gap := range gaps {
-			if ctx.Err() != nil {
-				return
+		err = h.healChunk(ctx, gap)
+		h.release(gap.ID)
+		if err != nil {
+			if ctx.Err() == nil {
+				h.log.Warn("heal: chunk failed, will retry", "worker", id, "gap", gap.ID, "err", err)
 			}
-			if err := h.healChunk(ctx, gap); err != nil {
-				if ctx.Err() == nil {
-					h.log.Warn("heal: chunk failed, will retry", "gap", gap.ID, "err", err)
-				}
-				continue
-			}
-			worked = true
-		}
-		if !worked {
 			if !sleepCtx(ctx, h.idle) {
 				return
 			}
 		}
 	}
+}
+
+// claim takes the first gap nobody else is healing.
+func (h *Healer) claim(gaps []store.Gap) (store.Gap, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, g := range gaps {
+		if h.inFlight[g.ID] {
+			continue
+		}
+		h.inFlight[g.ID] = true
+		return g, true
+	}
+	return store.Gap{}, false
+}
+
+func (h *Healer) release(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.inFlight, id)
 }
 
 // healChunk replays one chunk [chunkFrom .. gap.HealNextTo] and commits it

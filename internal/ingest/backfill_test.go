@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"sync/atomic"
+
 	"github.com/stellar/go-stellar-sdk/xdr"
 
 	"github.com/zkCaleb-dev/sierpe/internal/extract"
@@ -19,11 +21,17 @@ import (
 // counts batch calls so tests can assert how often a range was fetched.
 type fakeChunkChain struct {
 	oldest, tip uint32
-	calls       int
+	// callCount is atomic because the healer's workers fetch through one
+	// shared source concurrently; the counter is test bookkeeping, not
+	// something production reads.
+	callCount atomic.Int64
 }
 
+// calls reports how many batches were requested.
+func (f *fakeChunkChain) calls() int { return int(f.callCount.Load()) }
+
 func (f *fakeChunkChain) GetLedgerBatch(_ context.Context, start uint32, limit int) ([]xdr.LedgerCloseMeta, error) {
-	f.calls++
+	f.callCount.Add(1)
 	if start < f.oldest {
 		return nil, fmt.Errorf("ledger %d below oldest %d: %w", start, f.oldest, source.ErrBelowRetention)
 	}
@@ -246,8 +254,8 @@ func TestBackfillGroupSharesOneScan(t *testing.T) {
 	}
 	// The partial cell [4001..5000] is 1000 ledgers = 5 batches of 200,
 	// fetched once for the whole group — not once per contract.
-	if src.calls != 5 {
-		t.Errorf("source batch calls = %d, want 5 (one shared scan)", src.calls)
+	if src.calls() != 5 {
+		t.Errorf("source batch calls = %d, want 5 (one shared scan)", src.calls())
 	}
 	for _, id := range []string{"CAAA", "CBBB"} {
 		if bf := st.backfill(id); bf.NextTo != 4000 {
@@ -271,8 +279,8 @@ func TestBackfillStaggeredAnchorsConvergeInTheFirstCell(t *testing.T) {
 	}
 	// One scan of [4001..4997] (the cell floor up to the highest member):
 	// ceil(997/200) = 5 batches, once for both.
-	if src.calls != 5 {
-		t.Errorf("source batch calls = %d, want 5 (staggered anchors must share the cell scan)", src.calls)
+	if src.calls() != 5 {
+		t.Errorf("source batch calls = %d, want 5 (staggered anchors must share the cell scan)", src.calls())
 	}
 	for _, id := range []string{"CAAA", "CBBB"} {
 		if bf := st.backfill(id); bf.NextTo != 4000 {
@@ -280,11 +288,11 @@ func TestBackfillStaggeredAnchorsConvergeInTheFirstCell(t *testing.T) {
 		}
 	}
 	// From here on they are in lockstep: the next round is one shared scan.
-	calls := src.calls
+	calls := src.calls()
 	if !b.round(context.Background()) {
 		t.Fatal("second round did no work")
 	}
-	if got := src.calls - calls; got != 10 {
+	if got := src.calls() - calls; got != 10 {
 		t.Errorf("second-round batch calls = %d, want 10 (one scan of [2001..4000])", got)
 	}
 }
@@ -307,7 +315,7 @@ func TestBackfillCommitFailureIsolatesAndTrailsOnTheCache(t *testing.T) {
 	if bf := st.backfill("CBBB"); bf.NextTo != 5000 {
 		t.Errorf("CBBB next_to = %d, want 5000 (failed commit keeps the watermark)", bf.NextTo)
 	}
-	afterFirst := src.calls
+	afterFirst := src.calls()
 
 	if !b.round(context.Background()) {
 		t.Fatal("second round did no work")
@@ -320,7 +328,7 @@ func TestBackfillCommitFailureIsolatesAndTrailsOnTheCache(t *testing.T) {
 	}
 	// CBBB's retry of [4001..5000] must ride the cache: only CAAA's next
 	// cell [2001..4000] (10 batches) may hit the source.
-	if got := src.calls - afterFirst; got != 10 {
+	if got := src.calls() - afterFirst; got != 10 {
 		t.Errorf("second-round batch calls = %d, want 10 (trailer must not re-download)", got)
 	}
 }
