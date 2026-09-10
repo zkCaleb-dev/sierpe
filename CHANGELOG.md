@@ -40,7 +40,9 @@ All notable changes to Sierpe are documented here. The format follows
 - Backfill groups a cell apart now share their downloads. A batch paced
   to survive RPC rate limiting anchors across ledgers, so its walks land
   in different cells of the chunk grid and form groups that descend one
-  cell apart forever. Each asked for the cell the other had scanned one
+  cell apart. Nothing brings them back together: they merge only by
+  accident, when a transient failure makes the leading group miss a round
+  while the trailing one advances onto its cell. Each asked for the cell the other had scanned one
   round earlier, which the scan cache is meant to serve — but the cache
   only answers contracts the scan extracted for, and two groups are
   disjoint sets, so it missed every time and the batch downloaded the
