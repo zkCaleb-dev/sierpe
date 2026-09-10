@@ -18,7 +18,7 @@ Two services:
 
 | Field | Value |
 |---|---|
-| Source | Docker Image: `ghcr.io/zkcaleb-dev/sierpe:v1.9.0` |
+| Source | Docker Image: `ghcr.io/zkcaleb-dev/sierpe:v1.10.0` |
 | Service name | `sierpe` (it is the private hostname, `sierpe.railway.internal`) |
 | Service icon | `https://sierpe-web.vercel.app/favicon.svg` |
 | Healthcheck path | `/health` |
