@@ -162,15 +162,22 @@ func (b *Backfiller) round(ctx context.Context) bool {
 		groups[from] = append(groups[from], job)
 		tops[from] = max(tops[from], bf.NextTo)
 	}
-	// Highest cell first: a walk trailing another by one grid cell asks
-	// for the range scanned immediately before it, keeping the scan cache
-	// a guaranteed hit.
+	// Highest cell first: a walk trailing another by one grid cell asks for
+	// the range scanned immediately before it, so it meets that scan in the
+	// cache instead of downloading the cell again.
 	sort.Slice(order, func(i, j int) bool { return order[i] > order[j] })
 	for _, from := range order {
 		if ctx.Err() != nil {
 			return worked
 		}
-		if b.processGroup(ctx, chunkRange{from: from, to: tops[from]}, groups[from]) {
+		// The group one cell above lands exactly here next round, and the
+		// cache only serves contracts the scan extracted for — so extract
+		// for them now, while the ledgers are in hand. Without it two
+		// groups a cell apart never share a byte: they ask for the same
+		// ranges one round apart and miss on membership every time, which
+		// is what a batch registered over minutes always produces.
+		nextRound := groups[from+backfillChunkSize]
+		if b.processGroup(ctx, chunkRange{from: from, to: tops[from]}, groups[from], nextRound) {
 			worked = true
 		}
 	}
@@ -188,10 +195,22 @@ func chunkFromFor(bf store.Backfill) uint32 {
 // processGroup scans one grid chunk once for every contract in the group
 // and commits each contract's rows and watermark separately. It reports
 // whether at least one contract advanced.
-func (b *Backfiller) processGroup(ctx context.Context, rng chunkRange, jobs []store.BackfillJob) bool {
+//
+// ahead are the jobs of the group one cell above, which will ask for this
+// exact range next round. They are extracted for and cached but never
+// committed here: their own round commits them, off the cache, without
+// fetching the cell a second time.
+func (b *Backfiller) processGroup(ctx context.Context, rng chunkRange, jobs, ahead []store.BackfillJob) bool {
 	contracts := make([]store.Contract, len(jobs))
 	for i, j := range jobs {
 		contracts[i] = j.Contract
+	}
+	// partitionResult keys rows by contract, and every commit below takes
+	// only its own contract's part, so extracting for more contracts than
+	// the group cannot leak a row into the wrong walk.
+	scanFor := contracts
+	for _, j := range ahead {
+		scanFor = append(scanFor, j.Contract)
 	}
 
 	res, cached := b.cachedScan(rng, contracts)
@@ -199,10 +218,10 @@ func (b *Backfiller) processGroup(ctx context.Context, rng chunkRange, jobs []st
 	clamped := false
 	if !cached {
 		var err error
-		res, err = b.scan(ctx, registry.StaticSnapshot(contracts...), rng.from, rng.to)
+		res, err = b.scan(ctx, registry.StaticSnapshot(scanFor...), rng.from, rng.to)
 		switch {
 		case err == nil:
-			b.rememberScan(rng, contracts, res)
+			b.rememberScan(rng, scanFor, res)
 
 		case errors.Is(err, source.ErrNotYetAvailable):
 			// EXPECTED, not a failure: a fresh registration anchors its walk
