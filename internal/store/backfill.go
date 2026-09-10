@@ -81,21 +81,30 @@ var ErrNoBackfill = errors.New("store: no backfill for contract")
 // moving frontier. That is conservative, never a lie, and it heals as the
 // walk descends; the alternative (two watermarks) buys precision during a
 // rare operation at the cost of a second thing that can be wrong.
-// A registration also invalidates every deferred gap covering its history:
-// those deferrals came from a plan computed for a contract set that did not
-// include this one, so the ranges go back to the healer rather than staying
-// unread on the strength of a hint that never looked (docs/SPARSE-HEAL.md
-// §3). An operator who wants the sparse behaviour for the new contract
-// submits a new plan.
+// A registration that asks for history it did not have before also hands
+// every open gap covering that history back to the healer in full: deferred
+// ranges because the plan that skipped them was computed without this
+// contract, and already-healed stretches because they were derived against
+// a registry that did not include it either (docs/SPARSE-HEAL.md §3). An
+// operator who wants the sparse behaviour for the new contract submits a
+// new plan afterwards.
+//
+// A re-registration that asks for nothing new leaves the deferrals alone.
+// Reconciling the same contract twice must be a genuine no-op (rule 11):
+// re-running a registration script otherwise wipes out a plan the operator
+// applied in between, and re-running one is exactly what an operator does
+// after a batch reports failures it cannot distinguish from timeouts.
 func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, targetFrom, nextTo uint32, kinds []string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// nextTo below the target means there is no history to walk at all
 		// (a registration made before any cursor exists), so there is
 		// nothing whose deferral this contract could invalidate.
-		if nextTo >= targetFrom {
-			if _, err := ReopenDeferredGaps(ctx, tx, network, targetFrom, nextTo); err != nil {
-				return err
+		reopenDeferrals := func() error {
+			if nextTo < targetFrom {
+				return nil
 			}
+			_, err := ReopenGaps(ctx, tx, network, targetFrom, nextTo)
+			return err
 		}
 
 		var current Backfill
@@ -108,6 +117,9 @@ func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, 
 
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
+			if err := reopenDeferrals(); err != nil {
+				return err
+			}
 			done := nextTo < targetFrom
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO backfill (network, contract_id, target_from, next_to, done, covered_kinds)
@@ -154,6 +166,9 @@ func (s *Store) EnsureBackfill(ctx context.Context, network, contractID string, 
 				return fmt.Errorf("store: narrow covered kinds: %w", err)
 			}
 			return nil
+		}
+		if err := reopenDeferrals(); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE backfill

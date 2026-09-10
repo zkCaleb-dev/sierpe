@@ -359,3 +359,149 @@ func TestRecordGapLeavesFullyPromisedRangesAlone(t *testing.T) {
 		t.Errorf("gaps went from %d to %d, want no new promise", len(before), len(after))
 	}
 }
+
+// The prefix a gap has already healed was healed against the registry as it
+// stood then. A batch registering afterwards has no rows from it, so
+// recording that batch's clamp must promise the prefix again rather than
+// treat the open gap as covering its whole range.
+//
+// The pilot's shape: a gap healed from its top down to 63,698,263 while
+// three contracts were registered, then 1,285 more arrive and clamp. The
+// band between the watermark and the gap's top held 45% of their known
+// activity and half their deployments.
+func TestRecordGapPromisesTheHealedPrefixAgain(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gaps, backfill, contracts, events`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	gap := seedGap(t, s, 58_000_000, 64_210_263)
+	// Heal the top of it, as the archive leg did for the first three.
+	if err := s.CommitHealChunk(ctx, "testnet", gap, 63_698_263, false,
+		nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitHealChunk() error = %v", err)
+	}
+
+	// The new batch clamps at a higher wall.
+	if err := s.RecordGap(ctx, "testnet", 58_000_000, 64_243_000, "retention wall"); err != nil {
+		t.Fatalf("RecordGap() error = %v", err)
+	}
+
+	gaps := allGaps(t, s)
+	for i := 1; i < len(gaps); i++ {
+		if gaps[i].From <= gaps[i-1].To {
+			t.Fatalf("gap [%d..%d] overlaps [%d..%d]",
+				gaps[i-1].From, gaps[i-1].To, gaps[i].From, gaps[i].To)
+		}
+	}
+	// The original gap keeps its identity and range, and owes all of it
+	// again: the band above its watermark was healed for three contracts,
+	// not for the batch clamping now.
+	var rewound bool
+	for _, g := range gaps {
+		if g.From == 58_000_000 && g.To == 64_210_263 {
+			rewound = g.HealNextTo == 64_210_263
+		}
+	}
+	if !rewound {
+		t.Errorf("the partly healed gap was not rewound to owe its whole range: %+v", gaps)
+	}
+	// Only the window above it is genuinely new.
+	var window bool
+	for _, g := range gaps {
+		if g.From == 64_210_264 && g.To == 64_243_000 {
+			window = true
+		}
+	}
+	if !window {
+		t.Errorf("the window above the old gap was not recorded: %+v", gaps)
+	}
+}
+
+// Re-running a registration script must not undo a plan. Operators re-run
+// them precisely because a batch reports failures it cannot tell apart from
+// timeouts, and reconciling the same contract twice is defined as a no-op.
+func TestReRegisteringUnchangedLeavesThePlanAlone(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gaps, backfill, contracts, events`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	seedGap(t, s, 10_000, 99_999)
+	if err := s.EnsureBackfill(ctx, "testnet", "CBBB", 20_000, 99_999, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() error = %v", err)
+	}
+	if _, err := s.PlanHeal(ctx, "testnet", []Interval{{From: 50_000, To: 50_100}}, 0); err != nil {
+		t.Fatalf("PlanHeal() error = %v", err)
+	}
+	before, _, err := s.DeferredGaps(ctx, "testnet")
+	if err != nil || before == 0 {
+		t.Fatalf("DeferredGaps() = %d, %v, want the plan to have deferred something", before, err)
+	}
+
+	// The same registration again: nothing new is asked for.
+	if err := s.EnsureBackfill(ctx, "testnet", "CBBB", 20_000, 99_999, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() re-run error = %v", err)
+	}
+	after, _, err := s.DeferredGaps(ctx, "testnet")
+	if err != nil {
+		t.Fatalf("DeferredGaps() error = %v", err)
+	}
+	if after != before {
+		t.Errorf("deferred gaps went from %d to %d: a no-op re-registration destroyed the plan", before, after)
+	}
+
+	// Asking for older history than before still invalidates the deferrals.
+	if err := s.EnsureBackfill(ctx, "testnet", "CBBB", 10_000, 99_999, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() extend error = %v", err)
+	}
+	if n, _, err := s.DeferredGaps(ctx, "testnet"); err != nil || n != 0 {
+		t.Errorf("DeferredGaps() = %d, %v, want 0: extending the walk is new history", n, err)
+	}
+}
+
+// Registering a contract that reaches history healed before it existed
+// rewinds that gap, so the operator has a supported way to re-promise a
+// band an earlier heal derived for somebody else — extend the walk and the
+// range comes back, with no hand-written UPDATE.
+func TestRegisteringDeeperRewindsAHealedPrefix(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gaps, backfill, contracts, events`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	gap := seedGap(t, s, 58_000_000, 64_210_263)
+	if err := s.CommitHealChunk(ctx, "testnet", gap, 63_698_263, false,
+		nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitHealChunk() error = %v", err)
+	}
+	// A registration already on file, asking for nothing new later on.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 58_000_000, 64_300_000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() error = %v", err)
+	}
+	gaps := allGaps(t, s)
+	if len(gaps) != 1 || gaps[0].HealNextTo != 64_210_263 {
+		t.Fatalf("a new registration must rewind the healed prefix: %+v", gaps)
+	}
+
+	// Heal it partway down again, then re-register the same contract
+	// unchanged: nothing new is asked for, so nothing is disturbed.
+	if err := s.CommitHealChunk(ctx, "testnet", gaps[0], 63_000_000, false,
+		nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitHealChunk() second error = %v", err)
+	}
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 58_000_000, 64_300_000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() re-run error = %v", err)
+	}
+	if g := allGaps(t, s); g[0].HealNextTo != 63_000_000 {
+		t.Errorf("a no-op re-registration rewound the watermark to %d; it must leave progress alone", g[0].HealNextTo)
+	}
+
+	// Extending the walk deeper does ask for new history, so it rewinds.
+	if err := s.EnsureBackfill(ctx, "testnet", "CAAA", 57_000_000, 64_300_000, []string{KindEvents}); err != nil {
+		t.Fatalf("EnsureBackfill() extend error = %v", err)
+	}
+	if g := allGaps(t, s); g[0].HealNextTo != 64_210_263 {
+		t.Errorf("extending the walk did not rewind the healed prefix: %+v", g)
+	}
+}
