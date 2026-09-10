@@ -270,3 +270,92 @@ func TestPlanHealLeavesUnplannedNetworksAlone(t *testing.T) {
 		t.Errorf("mainnet has %d gaps in mode %s, want its single replay gap untouched", count, mode)
 	}
 }
+
+// A plan splits one gap into clusters and deserts, and every cluster the
+// healer resolves leaves a hole in the open coverage. The next batch to
+// clamp must fill those holes without covering the gaps still open above
+// them — the overlap the trimming exists to prevent, in the shape sparse
+// healing gave it.
+func TestRecordGapFillsHolesLeftByHealedClusters(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gaps, backfill, contracts, events`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	seedGap(t, s, 58_000_000, 63_698_263)
+	if _, err := s.PlanHeal(ctx, "testnet", []Interval{
+		{From: 59_146_455, To: 59_152_703},
+		{From: 60_000_000, To: 60_010_000},
+	}, 0); err != nil {
+		t.Fatalf("PlanHeal() error = %v", err)
+	}
+
+	// Resolve the lower cluster, as the healer would.
+	open, err := s.ListOpenGaps(ctx, "testnet")
+	if err != nil {
+		t.Fatalf("ListOpenGaps() error = %v", err)
+	}
+	var cluster Gap
+	for _, g := range open {
+		if g.From > 59_100_000 && g.From < 59_200_000 {
+			cluster = g
+		}
+	}
+	if cluster.ID == "" {
+		t.Fatalf("no cluster in %+v", open)
+	}
+	if err := s.CommitHealChunk(ctx, "testnet", cluster, cluster.From-1, true,
+		nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("CommitHealChunk() error = %v", err)
+	}
+
+	// A new registration batch clamps at a higher wall.
+	if err := s.RecordGap(ctx, "testnet", 58_000_000, 64_400_000, "retention wall"); err != nil {
+		t.Fatalf("RecordGap() error = %v", err)
+	}
+
+	gaps := allGaps(t, s)
+	for i := 1; i < len(gaps); i++ {
+		if gaps[i].From <= gaps[i-1].To {
+			t.Fatalf("gap [%d..%d] overlaps [%d..%d]",
+				gaps[i-1].From, gaps[i-1].To, gaps[i].From, gaps[i].To)
+		}
+	}
+	// The healed cluster's range is owed again — it was healed against a
+	// registry that did not include the batch now clamping.
+	var refilled, extended bool
+	for _, g := range gaps {
+		if g.From == cluster.From && g.To == cluster.To {
+			refilled = true
+		}
+		if g.To == 64_400_000 && g.From == 63_698_264 {
+			extended = true
+		}
+	}
+	if !refilled {
+		t.Errorf("the healed cluster range was not re-promised: %+v", gaps)
+	}
+	if !extended {
+		t.Errorf("the range above the old wall was not recorded: %+v", gaps)
+	}
+}
+
+func TestRecordGapLeavesFullyPromisedRangesAlone(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gaps, backfill, contracts, events`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	seedGap(t, s, 1000, 5000)
+
+	before := allGaps(t, s)
+	// A batch clamping inside a range an open gap already promises adds
+	// nothing: the un-vouched set is unchanged.
+	if err := s.RecordGap(ctx, "testnet", 2000, 4000, "retention wall"); err != nil {
+		t.Fatalf("RecordGap() error = %v", err)
+	}
+	after := allGaps(t, s)
+	if len(after) != len(before) {
+		t.Errorf("gaps went from %d to %d, want no new promise", len(before), len(after))
+	}
+}

@@ -203,53 +203,106 @@ func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerReco
 }
 
 // RecordGap persists an unserved range before it is skipped. Idempotent:
-// the deterministic id makes re-recording on restart a no-op.
+// the deterministic ids make re-recording on restart a no-op.
 //
-// The bottom of the range is TRIMMED past any open gap that already covers
-// it: registrations arrive in batches over days, every batch clamps at its
-// own (ever-rising) retention wall, and untrimmed gaps would overlap on
-// everything below the previous wall — making the healer replay the same
-// millions of ledgers once per batch. An open gap is a standing promise to
-// heal its range, so excluding it keeps the un-vouched set exactly the
-// same; the handoff in CommitHealChunk keeps the trimmed batch's coverage
-// honest below its own floor.
+// The range is recorded MINUS whatever open gaps already cover parts of it,
+// so it can produce several rows: registrations arrive in batches over days,
+// every batch clamps at its own (ever-rising) retention wall, and recording
+// the overlap again would make the healer replay the same millions of
+// ledgers once per batch. An open gap is a standing promise to heal its
+// range, so excluding it keeps the un-vouched set exactly the same; the
+// handoff in CommitHealChunk keeps the trimmed batch's coverage honest below
+// its own floor.
+//
+// Subtracting a SET of gaps rather than trimming a floor upward is what
+// makes this survive sparse healing: a plan splits one gap into clusters and
+// deserts, and every cluster the healer resolves leaves a hole in the open
+// coverage. Walking a floor up until the first hole would record everything
+// above it as one gap, overlapping every gap still open up there — the exact
+// overlap this trimming exists to prevent.
+//
+// Resolved gaps are deliberately NOT subtracted. A resolved gap was healed
+// against the registry as it stood then, so a contract registered afterwards
+// has no rows from that range and is owed a fresh replay of it.
 func (s *Store) RecordGap(ctx context.Context, network string, from, to uint32, reason string) error {
+	if to < from {
+		return fmt.Errorf("store: record gap: range [%d..%d] is inverted", from, to)
+	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		floor := int64(from)
-		for {
-			var coveredTo int64
-			err := tx.QueryRow(ctx, `
-				SELECT to_sequence FROM gaps
-				WHERE network = $1 AND resolved_at IS NULL
-				  AND from_sequence <= $2 AND to_sequence >= $2
-				ORDER BY to_sequence DESC
-				LIMIT 1
-				FOR UPDATE`, network, floor,
-			).Scan(&coveredTo)
-			if errors.Is(err, pgx.ErrNoRows) {
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("store: trim gap floor: %w", err)
-			}
-			floor = coveredTo + 1
-			if floor > int64(to) {
-				// Every ledger of the range is already promised by open
-				// gaps; nothing new to record.
-				return nil
-			}
+		rows, err := tx.Query(ctx, `
+			SELECT from_sequence, to_sequence FROM gaps
+			WHERE network = $1 AND resolved_at IS NULL
+			  AND to_sequence >= $2 AND from_sequence <= $3
+			ORDER BY from_sequence
+			FOR UPDATE`, network, int64(from), int64(to))
+		if err != nil {
+			return fmt.Errorf("store: read gaps covering the range: %w", err)
 		}
-		id := fmt.Sprintf("gap:%s:%d:%d", network, floor, to)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO gaps (id, network, from_sequence, to_sequence, reason)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (id) DO NOTHING`,
-			id, network, floor, int64(to), reason,
-		); err != nil {
-			return fmt.Errorf("store: record gap: %w", err)
+		var covered [][2]int64
+		for rows.Next() {
+			var f, t int64
+			if err := rows.Scan(&f, &t); err != nil {
+				rows.Close()
+				return fmt.Errorf("store: scan covering gap: %w", err)
+			}
+			covered = append(covered, [2]int64{f, t})
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("store: read gaps covering the range: %w", err)
+		}
+
+		for _, hole := range uncoveredRanges(int64(from), int64(to), covered) {
+			id := fmt.Sprintf("gap:%s:%d:%d", network, hole[0], hole[1])
+			// A hole can only collide with a RESOLVED gap of the same
+			// range: an open one would have been subtracted above. That
+			// range was healed against a registry without the batch now
+			// clamping, so the promise is owed again and the row reopens
+			// rather than being silently skipped — leaving it resolved
+			// would let the new registration claim history nobody derived
+			// for it (rule 7).
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO gaps (id, network, from_sequence, to_sequence, reason)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (id) DO UPDATE
+				SET resolved_at = NULL,
+				    heal_next_to = EXCLUDED.to_sequence,
+				    heal_mode = 'replay',
+				    reason = EXCLUDED.reason
+				WHERE gaps.resolved_at IS NOT NULL`,
+				id, network, hole[0], hole[1], reason,
+			); err != nil {
+				return fmt.Errorf("store: record gap %s: %w", id, err)
+			}
 		}
 		return nil
 	})
+}
+
+// uncoveredRanges returns the parts of [from, to] that no covering range
+// claims, in ascending order. covered must be sorted by its first element.
+func uncoveredRanges(from, to int64, covered [][2]int64) [][2]int64 {
+	var out [][2]int64
+	cursor := from
+	for _, c := range covered {
+		if cursor > to {
+			return out
+		}
+		if c[0] > cursor {
+			end := c[0] - 1
+			if end > to {
+				end = to
+			}
+			out = append(out, [2]int64{cursor, end})
+		}
+		if c[1]+1 > cursor {
+			cursor = c[1] + 1
+		}
+	}
+	if cursor <= to {
+		out = append(out, [2]int64{cursor, to})
+	}
+	return out
 }
 
 // OpenGaps counts unresolved gaps for /status and metrics.

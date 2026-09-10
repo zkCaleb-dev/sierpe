@@ -6,6 +6,24 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Recording a gap now subtracts the whole set of open gaps instead of
+  trimming its floor upward, so it can produce several rows. The old
+  walk stopped at the first ledger no open gap covered, which a heal
+  plan guarantees: every cluster the healer resolves leaves a hole in
+  the open coverage, and the next registration batch to clamp recorded
+  one gap from that hole to its wall — overlapping every gap still open
+  above it, and sending the healer to replay linearly exactly the
+  deserts the plan had just excluded. That is the overlap the trimming
+  was introduced to prevent, in the shape sparse healing gave it.
+- Re-recording a range whose gap was already healed reopens that gap
+  instead of silently doing nothing. The deterministic gap id collided
+  with the resolved row, so a contract registered after a heal was never
+  promised the range again and its coverage claimed history nobody had
+  derived for it. Resolved gaps were healed against the registry as it
+  stood then, so a later registration is owed a fresh replay.
+
 ## [1.10.0] - 2026-09-10
 
 ### Added
