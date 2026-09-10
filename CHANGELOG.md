@@ -13,8 +13,11 @@ All notable changes to Sierpe are documented here. The format follows
   no worker can commit a replay nobody proved; a gap is claimed while a
   chunk of it is in flight, so two workers never replay the same range or
   race on its watermark. Each worker is its own captive core, which makes
-  memory the binding constraint — about 10 GB per core in the mainnet
-  pilot — and it only pays off with several open gaps to spread across.
+  memory the binding constraint: budget about 10 GB per worker against the
+  machine's total RAM minus everything else it runs, since a core killed
+  mid-chunk costs that chunk's entire replay. A 16 GB host running anything
+  else affords one worker. It also only pays off with several open gaps to
+  spread across, which is what a heal plan produces.
 
 ## [1.9.0] - 2026-09-08
 
