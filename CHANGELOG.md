@@ -6,6 +6,23 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Sparse healing: `POST /v1/admin/gaps/plan` reconciles the open gaps
+  against a replay plan, splitting each one into the ranges the archive
+  leg will replay and the ranges it will not. Deferred ranges stay open
+  and declared — the plan is scheduling, never a claim, so a wrong plan
+  costs coverage and can never state that history was indexed when it
+  was not. Deep heals were the motive: replaying a 6.2M-ledger gap
+  linearly measured out at two weeks for activity that lived in 0.15% of
+  it, and planning the same gap brings it under two days.
+  Registering a contract reopens every deferred gap covering its
+  history, because the plan that deferred them was computed for a
+  contract set that did not include it. `/status` and the new
+  `sierpe_deferred_gaps` and `sierpe_deferred_ledgers` gauges break the
+  deferred share out of the open-gap count, so a plan does not read as
+  damage. See `docs/SPARSE-HEAL.md`.
+
 ## [1.9.0] - 2026-09-08
 
 ### Fixed

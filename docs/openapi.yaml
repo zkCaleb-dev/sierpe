@@ -104,6 +104,54 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ContractList" }
 
+  /v1/admin/gaps/plan:
+    post:
+      tags: [admin]
+      summary: Plan which parts of the open gaps get replayed
+      description: |
+        Reconciles the open gaps against a replay plan: the ledger ranges the
+        operator wants the archive leg to replay. Every other still-missing
+        ledger becomes a deferred gap, so the union of the open gaps is
+        exactly what it was and nothing stops being declared.
+
+        Idempotent: the same plan twice changes nothing, a wider plan turns
+        deferred ranges back into replay ones, and a narrower one defers what
+        it dropped. Ledgers already healed inside a gap are left alone.
+
+        A deferred gap records a decision not to replay, never a claim that
+        the range is empty, so a wrong plan costs coverage and can never
+        produce a false statement about indexed history. Registering a
+        contract reopens every deferred gap covering its history, because the
+        plan that deferred them was computed for a different contract set.
+
+        Intervals are supplied as the operator believes activity to be: the
+        server pads them and snaps them to checkpoint boundaries. See
+        docs/SPARSE-HEAL.md.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HealPlanRequest" }
+            example:
+              replay:
+                - { from: 59146455, to: 59152703 }
+                - { from: 59161088, to: 59161215 }
+              padding: 0
+      responses:
+        "200":
+          description: The open gaps the plan left behind.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealPlanResult" }
+              example:
+                replay_gaps: 58
+                deferred_gaps: 58
+                replay_ledgers: 649788
+                deferred_ledgers: 5050212
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/contracts/{id}:
     delete:
       tags: [admin]
@@ -846,6 +894,46 @@ components:
           type: string
           description: States what this resource is not — read it before treating totals as balances.
 
+    HealPlanRequest:
+      type: object
+      required: [replay]
+      properties:
+        replay:
+          type: array
+          minItems: 1
+          maxItems: 20000
+          description: >
+            Closed ledger ranges to replay. At least one: a plan that replays
+            nothing would defer every open gap, which has to be stated rather
+            than arrived at by posting an empty body.
+          items: { $ref: "#/components/schemas/LedgerInterval" }
+        padding:
+          type: integer
+          minimum: 0
+          maximum: 1048576
+          default: 300
+          description: >
+            Ledgers added on each side of every interval before they are
+            snapped to checkpoints. A plan that arrives already padded sets
+            this to 0 rather than paying for the margin twice.
+      additionalProperties: false
+
+    LedgerInterval:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: integer, minimum: 1 }
+        to: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    HealPlanResult:
+      type: object
+      properties:
+        replay_gaps: { type: integer, description: Open gaps the healer now owns. }
+        deferred_gaps: { type: integer, description: Open gaps deliberately not replayed. }
+        replay_ledgers: { type: integer }
+        deferred_ledgers: { type: integer }
+
     Status:
       type: object
       properties:
@@ -857,6 +945,15 @@ components:
         latest_known_ledger: { type: integer }
         tip_lag_seconds: { type: number }
         open_gaps: { type: integer }
+        deferred_gaps:
+          type: integer
+          description: >
+            Open gaps a heal plan decided not to replay. A subset of
+            open_gaps: deferred ranges stay recorded and declared, and the
+            count is broken out so a plan does not read as damage.
+        deferred_ledgers:
+          type: integer
+          description: Ledgers held by deferred gaps.
         source_failovers: { type: integer }
         pending_backfills: { type: integer }
         archive:

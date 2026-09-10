@@ -61,7 +61,8 @@
         "overrides": []
       },
       "targets": [
-        { "expr": "sierpe_open_gaps", "legendFormat": "gaps", "refId": "A" }
+        { "expr": "sierpe_open_gaps", "legendFormat": "gaps", "refId": "A" },
+        { "expr": "sierpe_deferred_gaps", "legendFormat": "deferred", "refId": "B" }
       ]
     },
     {

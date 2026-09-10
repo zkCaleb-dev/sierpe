@@ -25,6 +25,8 @@ type Metrics struct {
 	SourceFailovers      prometheus.Counter
 	CommitSeconds        prometheus.Histogram
 	OpenGaps             prometheus.Gauge
+	DeferredGaps         prometheus.Gauge
+	DeferredLedgers      prometheus.Gauge
 	EventsExtracted      prometheus.Counter
 	StateChanges         prometheus.Counter
 	Transfers            prometheus.Counter
@@ -71,6 +73,14 @@ func NewMetrics() *Metrics {
 		OpenGaps: factory.NewGauge(prometheus.GaugeOpts{
 			Name: "sierpe_open_gaps",
 			Help: "Unresolved coverage gaps recorded in the database.",
+		}),
+		DeferredGaps: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "sierpe_deferred_gaps",
+			Help: "Open gaps a heal plan decided not to replay (subset of sierpe_open_gaps).",
+		}),
+		DeferredLedgers: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "sierpe_deferred_ledgers",
+			Help: "Ledgers held by deferred gaps: recorded as missing, deliberately not replayed.",
 		}),
 		EventsExtracted: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sierpe_events_extracted_total",
@@ -226,6 +236,8 @@ type Status struct {
 	LatestKnown      uint32    `json:"latest_known_ledger"`
 	TipLagSeconds    float64   `json:"tip_lag_seconds"`
 	OpenGaps         int64     `json:"open_gaps"`
+	DeferredGaps     int64     `json:"deferred_gaps"`
+	DeferredLedgers  int64     `json:"deferred_ledgers"`
 	SourceFailovers  int64     `json:"source_failovers"`
 	PendingBackfills int64     `json:"pending_backfills"`
 	// Archive is the archive leg's state: off, unverified, verified, or
@@ -240,6 +252,8 @@ type State struct {
 	latestKnown      atomic.Uint32
 	tipLagMilli      atomic.Int64
 	openGaps         atomic.Int64
+	deferredGaps     atomic.Int64
+	deferredLedgers  atomic.Int64
 	failovers        atomic.Int64
 	pendingBackfills atomic.Int64
 	archive          atomic.Value // string
@@ -258,7 +272,17 @@ func (s *State) Observe(cursor, latest uint32, tipLag time.Duration) {
 
 // SetOpenGaps, SetFailovers, and SetPendingBackfills feed the slower-moving
 // counters.
-func (s *State) SetOpenGaps(n int64)         { s.openGaps.Store(n) }
+func (s *State) SetOpenGaps(n int64) { s.openGaps.Store(n) }
+
+// SetDeferredGaps records the deferred share of the open gaps: ranges a heal
+// plan decided not to replay. They are open and declared like any other gap,
+// so they are counted inside OpenGaps too; without the breakdown an operator
+// reads a plan as damage (docs/SPARSE-HEAL.md).
+func (s *State) SetDeferredGaps(gaps, ledgers int64) {
+	s.deferredGaps.Store(gaps)
+	s.deferredLedgers.Store(ledgers)
+}
+
 func (s *State) SetFailovers(n int64)        { s.failovers.Store(n) }
 func (s *State) SetPendingBackfills(n int64) { s.pendingBackfills.Store(n) }
 
@@ -322,6 +346,8 @@ func (s *Server) snapshot() Status {
 		LatestKnown:      s.state.latestKnown.Load(),
 		TipLagSeconds:    float64(s.state.tipLagMilli.Load()) / 1000,
 		OpenGaps:         s.state.openGaps.Load(),
+		DeferredGaps:     s.state.deferredGaps.Load(),
+		DeferredLedgers:  s.state.deferredLedgers.Load(),
 		SourceFailovers:  s.state.failovers.Load(),
 		PendingBackfills: s.state.pendingBackfills.Load(),
 		Archive:          s.state.archiveState(),

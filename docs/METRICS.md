@@ -10,6 +10,8 @@ metric does not ship without a row here (CLAUDE.md verification rules).
 | `sierpe_source_failovers_total` | counter | Times the RPC pool switched endpoints. | Bursts = unhealthy preferred endpoint. |
 | `sierpe_commit_duration_seconds` | histogram | Time to commit one ledger (cursor + continuity + events, one transaction). | p99 growth = database pressure. |
 | `sierpe_open_gaps` | gauge | Unresolved coverage gaps recorded in the database. | Any nonzero value is declared, unserved history. |
+| `sierpe_deferred_gaps` | gauge | Open gaps a heal plan decided not to replay. A subset of `sierpe_open_gaps`. | Not an alert: it rises on purpose when a plan is applied. Alert on `sierpe_open_gaps` minus this staying flat while the archive leg is verified. |
+| `sierpe_deferred_ledgers` | gauge | Ledgers held by deferred gaps: recorded as missing, deliberately not replayed. | Not an alert. It is the size of the history a plan chose to leave unread; a drop means a registration or a wider plan handed ranges back to the healer. |
 | `sierpe_events_extracted_total` | counter | Events from watched contracts committed to the store. | Zero while contracts are active = extraction problem. |
 | `sierpe_state_changes_extracted_total` | counter | Contract-data changes from watched contracts committed to the store. | Zero while state-kind contracts are active = extraction problem. |
 | `sierpe_transfers_extracted_total` | counter | Token transfers decoded from watched contracts and committed to the store. | Zero while transfers-kind contracts are active = decoder problem. |

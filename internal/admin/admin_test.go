@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -97,10 +98,30 @@ func (f *fakePlanner) EnsureBackfill(_ context.Context, _ string, contractID str
 	return nil
 }
 
+// fakeHealPlanner records the plans the admin API applied.
+type fakeHealPlanner struct {
+	replay  []store.Interval
+	padding uint32
+	calls   int
+	res     store.PlanResult
+	err     error
+}
+
+func (f *fakeHealPlanner) PlanHeal(_ context.Context, _ string, replay []store.Interval, padding uint32) (store.PlanResult, error) {
+	f.calls++
+	f.replay, f.padding = replay, padding
+	return f.res, f.err
+}
+
 func newTestServerWithPlanner(st *fakeStore, planner *fakePlanner, reg *fakeReloader, cls *fakeClassifier) *httptest.Server {
+	return newTestServerWithHeal(st, planner, &fakeHealPlanner{}, reg, cls)
+}
+
+func newTestServerWithHeal(st *fakeStore, planner *fakePlanner, heal *fakeHealPlanner,
+	reg *fakeReloader, cls *fakeClassifier) *httptest.Server {
 	mux := http.NewServeMux()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	NewServer("testnet", testToken, st, planner, reg, cls, log).Register(mux)
+	NewServer("testnet", testToken, st, planner, heal, reg, cls, log).Register(mux)
 	return httptest.NewServer(mux)
 }
 
@@ -504,5 +525,98 @@ func TestDeleteRejectsInvalidID(t *testing.T) {
 	}
 	if len(st.deleted) != 0 {
 		t.Error("invalid ids must never reach the store")
+	}
+}
+
+func TestPlanAppliesTheReplayIntervals(t *testing.T) {
+	heal := &fakeHealPlanner{res: store.PlanResult{
+		ReplayGaps: 2, DeferredGaps: 3, ReplayLedgers: 640, DeferredLedgers: 90_000,
+	}}
+	srv := newTestServerWithHeal(&fakeStore{}, &fakePlanner{}, heal, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/admin/gaps/plan", testToken,
+		`{"replay":[{"from":100,"to":200},{"from":5000,"to":5100}],"padding":0}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got store.PlanResult
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	resp.Body.Close()
+	if got != heal.res {
+		t.Errorf("body = %+v, want %+v", got, heal.res)
+	}
+	if heal.calls != 1 || len(heal.replay) != 2 {
+		t.Fatalf("planner saw %d calls with %d intervals, want 1 and 2", heal.calls, len(heal.replay))
+	}
+	if heal.replay[0] != (store.Interval{From: 100, To: 200}) {
+		t.Errorf("interval 0 = %+v, want the request untouched", heal.replay[0])
+	}
+	if heal.padding != 0 {
+		t.Errorf("padding = %d, want the explicit 0 to survive", heal.padding)
+	}
+}
+
+func TestPlanDefaultsThePadding(t *testing.T) {
+	heal := &fakeHealPlanner{}
+	srv := newTestServerWithHeal(&fakeStore{}, &fakePlanner{}, heal, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/admin/gaps/plan", testToken,
+		`{"replay":[{"from":100,"to":200}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+	if heal.padding != defaultPlanPadding {
+		t.Errorf("padding = %d, want the %d default when the field is absent", heal.padding, defaultPlanPadding)
+	}
+}
+
+func TestPlanRejectsBadBodies(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"empty plan", `{"replay":[]}`},
+		{"missing replay", `{}`},
+		{"zero from", `{"replay":[{"from":0,"to":200}]}`},
+		{"inverted range", `{"replay":[{"from":300,"to":200}]}`},
+		{"unknown field", `{"replay":[{"from":100,"to":200}],"mode":"sparse"}`},
+		{"padding above the cap", `{"replay":[{"from":100,"to":200}],"padding":99999999}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			heal := &fakeHealPlanner{}
+			srv := newTestServerWithHeal(&fakeStore{}, &fakePlanner{}, heal, &fakeReloader{}, okClassifier())
+			defer srv.Close()
+
+			resp := doRequest(t, http.MethodPost, srv.URL+"/v1/admin/gaps/plan", testToken, tc.body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+			if heal.calls != 0 {
+				t.Error("an invalid plan must be rejected before the store is touched")
+			}
+		})
+	}
+}
+
+func TestPlanRequiresTheAdminToken(t *testing.T) {
+	heal := &fakeHealPlanner{}
+	srv := newTestServerWithHeal(&fakeStore{}, &fakePlanner{}, heal, &fakeReloader{}, okClassifier())
+	defer srv.Close()
+
+	resp := doRequest(t, http.MethodPost, srv.URL+"/v1/admin/gaps/plan", "wrong-token",
+		`{"replay":[{"from":100,"to":200}]}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	if heal.calls != 0 {
+		t.Error("an unauthenticated plan must never reach the store")
 	}
 }
