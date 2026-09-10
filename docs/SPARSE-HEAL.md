@@ -185,7 +185,16 @@ It must not go through `RecordGap`, whose floor-trimming against open gaps
 exists for a different purpose and would fight the split.
 
 Ranges already healed are untouched: the operation only ever partitions what
-is still open.
+is still open. That is safe because a healed stretch stops being a promise
+only to the contracts it was healed for — and the moment a later batch
+clamps over it, `RecordGap` rewinds the gap to owe the stretch again, so the
+next plan partitions it like any other missing range.
+
+Apply a plan with the healer idle. A split replaces the gap row, and a
+worker holding that row mid-chunk fails its commit with `gap vanished or
+resolved mid-heal`, losing the chunk's replay. Nothing is corrupted — the
+watermark only moves on commit — but on a deep gap that is hours of work
+thrown away.
 
 ### Checkpoint alignment and padding
 

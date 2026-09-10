@@ -8,6 +8,33 @@ All notable changes to Sierpe are documented here. The format follows
 
 ### Fixed
 
+- Recording a gap now rewinds every open gap it touches to owe its whole
+  range again. A gap heals top-down against the registry as it stands at
+  the time, so the stretch above its watermark was derived for whoever
+  was registered then. A batch registering afterwards had that stretch
+  subtracted from its own clamp as though it were covered, and its
+  declared frontier would then descend past the band as the gap healed
+  below it, with coverage claiming history nobody read for those
+  contracts. It is the same doctrine 1.10.1 applied to resolved gaps, in
+  the one place it had not been applied: the healed prefix of an open
+  one. Found before it cost anything, on a mainnet instance whose band
+  held 45% of the known activity of the 1,285 contracts about to clamp
+  over it, and half their deployments.
+- Registering a contract that reaches history healed before it existed
+  now rewinds that gap too, not only the deferred ones. Both are the same
+  rule — a plan skipped ranges without knowing about this contract, and a
+  heal derived rows without knowing about it either — and it gives an
+  operator a supported way to re-promise a band an earlier heal derived
+  for somebody else: extend the walk and the range comes back, with no
+  hand-written UPDATE against the tables.
+- Re-registering a contract that asks for nothing new no longer reopens
+  the deferred gaps covering it. Reconciling the same registration twice
+  is defined as a no-op, and re-running a registration script is exactly
+  what an operator does after a batch reports failures it cannot tell
+  apart from timeouts, which silently undid any heal plan applied in
+  between. Registrations that are new, that extend the walk or that add
+  a kind still invalidate the deferrals: those genuinely ask for history
+  the plan skipped.
 - Backfill groups a cell apart now share their downloads. A batch paced
   to survive RPC rate limiting anchors across ledgers, so its walks land
   in different cells of the chunk grid and form groups that descend one
