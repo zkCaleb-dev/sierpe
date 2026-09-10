@@ -6,6 +6,8 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-09-10
+
 ### Added
 
 - Sparse healing: `POST /v1/admin/gaps/plan` reconciles the open gaps
