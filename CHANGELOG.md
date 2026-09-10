@@ -6,6 +6,24 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Both images now carry `org.opencontainers.image.source`, which is what
+  links a published package to its repository. Without it GHCR kept the
+  package detached through 117 versions: it never showed on the repo page
+  and never inherited its visibility.
+- The `-full` image pins an exact stellar-core build instead of the
+  floating `28` tag. That tag moved from 28.0.0 to 28.0.1 mid-pilot, so
+  the same Dockerfile silently produced a different replay engine
+  depending on the build date — in the one image whose job is to
+  reproduce history byte-for-byte. The pin is now bumped deliberately as
+  part of a release, and the equivalence gate re-proves each new build.
+- `docs/RELEASING.md` now includes moving `latest`, which nothing does on
+  its own. It had stayed on v1.5.2 through four releases, so every
+  `docker pull` without an explicit tag served an image missing the
+  backfill fixes from 1.6.0 through 1.9.0. The tag has been corrected;
+  anyone who pulled `latest` since 2026-09-07 should pull again.
+
 ## [1.9.0] - 2026-09-08
 
 ### Fixed
