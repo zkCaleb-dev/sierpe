@@ -221,14 +221,35 @@ func (s *Store) CommitLedger(ctx context.Context, network string, rec LedgerReco
 // above it as one gap, overlapping every gap still open up there — the exact
 // overlap this trimming exists to prevent.
 //
-// Resolved gaps are deliberately NOT subtracted. A resolved gap was healed
-// against the registry as it stood then, so a contract registered afterwards
-// has no rows from that range and is owed a fresh replay of it.
+// Before subtracting, every open gap the range touches is rewound to owe
+// its whole range again. A gap heals top-down against the registry as it
+// stands at the time, so the stretch above its watermark was derived for
+// whoever was registered then — not for the batch clamping now. Leaving
+// that stretch discharged would let this batch's frontier descend past it
+// as the gap heals below, with coverage claiming a band nobody ever read
+// for these contracts. Re-replaying it costs time; not re-replaying it
+// costs the truth (rule 7).
+//
+// Resolved gaps are not subtracted at all, for the same reason: they were
+// healed against an older registry and are owed again.
 func (s *Store) RecordGap(ctx context.Context, network string, from, to uint32, reason string) error {
 	if to < from {
 		return fmt.Errorf("store: record gap: range [%d..%d] is inverted", from, to)
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// Rewinding in place keeps gap identity and ranges intact; promising
+		// the healed stretch as its own row would overlap the gap it came
+		// from, which is the very thing this subtraction exists to avoid.
+		if _, err := tx.Exec(ctx, `
+			UPDATE gaps SET heal_next_to = to_sequence
+			WHERE network = $1 AND resolved_at IS NULL
+			  AND to_sequence >= $2 AND from_sequence <= $3
+			  AND heal_next_to IS NOT NULL AND heal_next_to < to_sequence`,
+			network, int64(from), int64(to),
+		); err != nil {
+			return fmt.Errorf("store: rewind partly healed gaps: %w", err)
+		}
+
 		rows, err := tx.Query(ctx, `
 			SELECT from_sequence, to_sequence FROM gaps
 			WHERE network = $1 AND resolved_at IS NULL
@@ -287,6 +308,11 @@ func uncoveredRanges(from, to int64, covered [][2]int64) [][2]int64 {
 	for _, c := range covered {
 		if cursor > to {
 			return out
+		}
+		// A gap healed below its own floor owes nothing; it covers no part
+		// of the range being recorded.
+		if c[1] < c[0] {
+			continue
 		}
 		if c[0] > cursor {
 			end := c[0] - 1
