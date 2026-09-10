@@ -96,6 +96,29 @@ backwards in atomic chunks (clamping honestly at the RPC retention wall),
 and follows the tip. Watch progress in `/status` (`pending_backfills`) or
 the `sierpe_backfill_*` metrics.
 
+### Registering a fleet
+
+Each registration classifies the contract by reading its spec from the
+RPC, so a batch is a burst of `getLedgerEntries` — and public endpoints
+rate-limit. Registering a 1,285-contract fleet on mainnet, measured:
+**~1.8 req/s failed 118 of 300** with `http 429` once the first hundred
+had gone through, while **1 req/s with exponential backoff placed
+1,017 of 1,017** in 25 minutes. Pace a large batch at **one registration
+per second**.
+
+A failure your script sees is not proof the contract is unregistered.
+The RPC client gives each endpoint 30 seconds before moving to the next,
+so classification can legitimately take `30s × endpoints` — 60 seconds
+with two, which is exactly where a 60-second client timeout sits. The
+registration row is also committed before the response is written, so a
+client that hangs up during the walk of its own history can leave a row
+behind. It does not retry the classify internally: a 429 fails over once
+per endpoint and then errors.
+
+None of that costs anything, because registration reconciles rather than
+inserts (admin doctrine, rule 11): **retry freely, and count what
+`GET /v1/contracts` returns rather than what your script counted.**
+
 ## The archive leg (`-full` image)
 
 The slim image clamps honestly at the RPC retention wall and records the
