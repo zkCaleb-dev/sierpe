@@ -6,6 +6,18 @@ All notable changes to Sierpe are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Both images now carry `org.opencontainers.image.source`, which is what
+  links a published package to its repository. Without it GHCR kept the
+  package detached through 117 versions: it never showed on the repo page
+  and never inherited its visibility.
+- `docs/RELEASING.md` now includes moving `latest`, which nothing does on
+  its own. It had stayed on v1.5.2 through four releases, so every
+  `docker pull` without an explicit tag served an image missing the
+  backfill fixes from 1.6.0 through 1.9.0. The tag has been corrected;
+  anyone who pulled `latest` since 2026-09-07 should pull again.
+
 ## [1.9.0] - 2026-09-08
 
 ### Fixed

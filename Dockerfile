@@ -12,6 +12,13 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /out/sierpe ./cmd/sierpe
 
 FROM gcr.io/distroless/static-debian12:nonroot
+# The source label is what links the published package to this repository:
+# without it GHCR keeps the package detached, so it never appears on the
+# repo page and never inherits its visibility. Registries read it off the
+# pushed image, so it has to live in the final stage.
+LABEL org.opencontainers.image.source="https://github.com/zkCaleb-dev/sierpe" \
+      org.opencontainers.image.description="Self-hosted Stellar contract indexer" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/sierpe /sierpe
 EXPOSE 8080
 # The probe is the binary itself: distroless has no shell or curl, and the

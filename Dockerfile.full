@@ -18,6 +18,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 # The runtime base ships /usr/bin/stellar-core with its shared libraries;
 # sierpe rides along and spawns core as a captive subprocess.
 FROM stellar/stellar-core:28
+# See Dockerfile: the source label is what links the package to the repo.
+LABEL org.opencontainers.image.source="https://github.com/zkCaleb-dev/sierpe" \
+      org.opencontainers.image.description="Self-hosted Stellar contract indexer, with stellar-core for the archive leg" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/sierpe /sierpe
 ENV STELLAR_CORE_BINARY=/usr/bin/stellar-core
 EXPOSE 8080

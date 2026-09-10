@@ -42,6 +42,21 @@ Verify both architectures landed before announcing anything:
 docker manifest inspect ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z | grep architecture
 ```
 
+**Move `latest`.** It is a separate push and nothing moves it on its own —
+`latest` sat on v1.5.2 through four releases (found 2026-09-10), so every
+`docker pull` without a tag served an image missing every backfill fix from
+1.6.0 to 1.9.0. Only the slim image carries `latest`; the archive variant is
+always pulled by explicit tag.
+
+```bash
+docker buildx imagetools create -t ghcr.io/zkcaleb-dev/sierpe:latest \
+  ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z
+docker manifest inspect ghcr.io/zkcaleb-dev/sierpe:latest | grep digest
+```
+
+The digests must match the tag's. `imagetools create` copies the multi-arch
+index rather than re-pushing an image, so `latest` keeps both architectures.
+
 ## Verify before publishing the draft
 
 - `docker run` the pushed image against a scratch Postgres and testnet:
