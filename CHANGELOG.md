@@ -15,7 +15,8 @@ All notable changes to Sierpe are documented here. The format follows
   costs coverage and can never state that history was indexed when it
   was not. Deep heals were the motive: replaying a 6.2M-ledger gap
   linearly measured out at two weeks for activity that lived in 0.15% of
-  it, and planning the same gap brings it under two days.
+  it, and planning the same gap brings it to about four days on one
+  worker.
   Registering a contract reopens every deferred gap covering its
   history, because the plan that deferred them was computed for a
   contract set that did not include it. `/status` and the new
@@ -30,6 +31,24 @@ All notable changes to Sierpe are documented here. The format follows
   `gaps_pending_heal` (open minus deferred) and the equivalent for
   Prometheus is `sierpe_open_gaps - sierpe_deferred_gaps`. Instances that
   never apply a plan are unaffected.
+
+### Fixed
+
+- Both images now carry `org.opencontainers.image.source`, which is what
+  links a published package to its repository. Without it GHCR kept the
+  package detached through 117 versions: it never showed on the repo page
+  and never inherited its visibility.
+- The `-full` image pins an exact stellar-core build instead of the
+  floating `28` tag. That tag moved from 28.0.0 to 28.0.1 mid-pilot, so
+  the same Dockerfile silently produced a different replay engine
+  depending on the build date — in the one image whose job is to
+  reproduce history byte-for-byte. The pin is now bumped deliberately as
+  part of a release, and the equivalence gate re-proves each new build.
+- `docs/RELEASING.md` now includes moving `latest`, which nothing does on
+  its own. It had stayed on v1.5.2 through four releases, so every
+  `docker pull` without an explicit tag served an image missing the
+  backfill fixes from 1.6.0 through 1.9.0. The tag has been corrected;
+  anyone who pulled `latest` since 2026-09-07 should pull again.
 
 ## [1.9.0] - 2026-09-08
 

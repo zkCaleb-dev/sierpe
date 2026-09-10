@@ -42,6 +42,35 @@ Verify both architectures landed before announcing anything:
 docker manifest inspect ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z | grep architecture
 ```
 
+**Check the captive core pin.** `Dockerfile.full` pins an exact
+stellar-core build rather than the floating `28` tag, because that tag
+moves under the same Dockerfile. Before a release, see whether SDF
+published a newer one and bump it deliberately:
+
+```bash
+curl -s "https://hub.docker.com/v2/repositories/stellar/stellar-core/tags?page_size=100" \
+  | python3 -c "import sys,json;print([t['name'] for t in json.load(sys.stdin)['results'] if t['name'].startswith('28.')])"
+```
+
+The archive leg re-proves any new build against the RPC on its first heal,
+so a bump is safe, but it is a change to the replay engine and belongs in
+the CHANGELOG rather than arriving unannounced.
+
+**Move `latest`.** It is a separate push and nothing moves it on its own —
+`latest` sat on v1.5.2 through four releases (found 2026-09-10), so every
+`docker pull` without a tag served an image missing every backfill fix from
+1.6.0 to 1.9.0. Only the slim image carries `latest`; the archive variant is
+always pulled by explicit tag.
+
+```bash
+docker buildx imagetools create -t ghcr.io/zkcaleb-dev/sierpe:latest \
+  ghcr.io/zkcaleb-dev/sierpe:vX.Y.Z
+docker manifest inspect ghcr.io/zkcaleb-dev/sierpe:latest | grep digest
+```
+
+The digests must match the tag's. `imagetools create` copies the multi-arch
+index rather than re-pushing an image, so `latest` keeps both architectures.
+
 ## Verify before publishing the draft
 
 - `docker run` the pushed image against a scratch Postgres and testnet:
