@@ -19,8 +19,8 @@ From the TrustlessWork mainnet pilot, healing a 6.21M-ledger gap on a Ryzen
 | Quantity | Measured |
 |---|---|
 | Replay throughput | **4.72 ledgers/s** end-to-end (~4.8–5.0 net of spin-up) |
-| Captive core spin-up | **~1 h** per run (bucket download + apply at the anchor checkpoint) |
-| Peak RAM per captive core | 9.8 GB |
+| Captive core spin-up | **13 min** for a deep chunk; **~1 h** for the first run of all, on cold scratch near the tip |
+| Peak RAM per captive core | **8.9–9.8 GB, whether the chunk is 9 ledgers or 500,000** |
 | Peak scratch | 47 GB |
 | Ledgers with any activity of the 1,285 registered contracts | **9,222 of 6.21M — 0.15%** |
 | Harvest of one 500k-ledger chunk | 13 events, 13 state changes, 3 movements |
@@ -31,9 +31,13 @@ data actually being recovered lives in 0.15% of them.
 Two structural facts follow, and the design is shaped by both:
 
 - **Spin-up is a fixed cost per replayed segment.** Cutting a range into more
-  segments buys fewer replayed ledgers at the price of another hour. Splitting
-  at a hole is worth it only when the hole is longer than
-  `spin_up x throughput` — about **17,000 ledgers** at the measured rates.
+  segments buys fewer replayed ledgers at the price of another spin-up.
+  Splitting at a hole pays only when the hole is longer than
+  `spin_up x throughput`, so the break-even moves with the spin-up: about
+  **3,700 ledgers** at the 13-minute figure a deep chunk actually costs, and
+  about **17,000** at the hour the very first run took. Measure your own
+  before choosing a clustering threshold; the pilot planned at 10,000 on the
+  pessimistic number and the curve is flat enough that it cost little.
 - **Random per-ledger access would dissolve the problem**, and is not
   available. The SDF ledger-close-meta lake is not anonymously readable
   (verified empirically: `gs://sdf-ledger-close-meta` denies both
@@ -238,7 +242,7 @@ worker starts.
 
 **RAM is the binding constraint, and the sum is over the whole machine.**
 Each worker is a captive core; the pilot measured one at **7.6 GB resident
-at rest and 9.8 GB at peak**. The budget is total host memory minus
+at rest and 9.8 GB at peak**, and a second chunk at **8.95 GB**. The budget is total host memory minus
 everything else the machine runs — not the free memory of the moment, which
 looks generous right up until the peak arrives. The pilot's 15.4 GB host
 with ~1.6 GB of other services therefore supports **one** worker: two would
@@ -248,16 +252,22 @@ chunk's replay, which can be a day of work.
 That footprint does not shrink with smaller clusters, which is the tempting
 way to fit a second worker. A catchup's memory is dominated by the bucket
 state of its anchor checkpoint — the size of the network, not the length of
-the range being replayed — so a 10,000-ledger cluster costs about what a
-500,000-ledger chunk costs. The measurement that settles it is the
-equivalence gate: it replays **eight ledgers**, and the pilot watched its
-core reach **6.5 GB** doing so. Deep checkpoints are somewhat cheaper
-because the network was smaller then, but that is a property of how far back
-a cluster sits, not of how wide it is.
+the range being replayed.
 
-At the pilot's numbers, 57 clusters take about 96 h on the one worker its
-host can afford. Two workers would halve that; on this hardware that is a
-memory upgrade, not a configuration change.
+The pilot measured both ends of that claim on real heal chunks. A
+**500,000-ledger** chunk peaked at 9.8 GB. A **nine-ledger** chunk — one of
+the wall-drift gaps — peaked at **8.95 GB**. Same band, for ranges differing
+by a factor of fifty-five thousand. Range width is not a lever on memory,
+and a host that cannot afford two workers for a wide chunk cannot afford
+them for a narrow one either. Deep checkpoints are somewhat cheaper because
+the network was smaller then, but that is a property of how far back a
+cluster sits, not of how wide it is.
+
+The pilot's planned heal, measured rather than modelled: 62 replay gaps over
+643,397 ledgers, 62 spin-ups at ~13 min plus 36.6 h of replay, about **50 h
+on the one worker its host can afford** — against roughly two weeks of
+linear replay for the same history. Two workers would halve it; on this
+hardware that is a memory upgrade, not a configuration change.
 
 ### Observability
 
