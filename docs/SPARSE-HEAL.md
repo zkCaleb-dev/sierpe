@@ -35,9 +35,7 @@ Two structural facts follow, and the design is shaped by both:
   Splitting at a hole pays only when the hole is longer than
   `spin_up x throughput`, so the break-even moves with the spin-up: about
   **3,700 ledgers** at the 13-minute figure a deep chunk actually costs, and
-  about **17,000** at the hour the very first run took. Measure your own
-  before choosing a clustering threshold; the pilot planned at 10,000 on the
-  pessimistic number and the curve is flat enough that it cost little.
+  about **17,000** at the hour the very first run took.
 - **Random per-ledger access would dissolve the problem**, and is not
   available. The SDF ledger-close-meta lake is not anonymously readable
   (verified empirically: `gs://sdf-ledger-close-meta` denies both
@@ -46,10 +44,45 @@ Two structural facts follow, and the design is shaped by both:
   are the only usable source of deep history, so the design stays on captive
   core replay.
 
-Clustering the 9,222 active ledgers with a 10,000-ledger hole threshold gives
-57 clusters covering 565,846 ledgers: **57 spin-ups plus 33 h of replay, about
-90 h**, against 335 h linear. Wider thresholds are worse (50k → 99 h, 100k →
-113 h), which is what the 17,000-ledger break-even predicts.
+### Choosing the clustering threshold
+
+The break-even is where the curve turns, not where the cost sits. Costed
+over the pilot's own activity map at the measured 13-minute spin-up and
+4.88 ledgers/s:
+
+| Hole threshold | Intervals | Ledgers replayed | Hours |
+|---|---|---|---|
+| 2,000 | 129 | 330,503 | 46.3 |
+| **3,700** | 98 | 395,538 | **43.4** |
+| **5,000** | 85 | 443,856 | **43.4** |
+| 10,000 | 57 | 640,121 | 48.6 |
+| 20,000 | 32 | 980,439 | 62.6 |
+| 50,000 | 14 | 1,495,462 | 88.1 |
+
+Two things to take from the shape rather than from any single row.
+
+The optimum is a **plateau, not a point** — 3,700 and 5,000 cost the same,
+so the break-even does not have to be hit precisely. And the penalty is
+**asymmetric**: too fine costs little (2,000 is 7% over the best) because
+spin-ups accumulate gently, while too coarse costs a lot (50,000 doubles
+it) because every widened cluster drags in dead ledgers at full replay
+price. **When the spin-up is uncertain, err fine.**
+
+The pilot planned at 10,000, from the pessimistic hour-long spin-up, and
+paid 11% for it.
+
+### Measure the spin-up before you plan, not after
+
+The figure that sets the threshold is the one thing a plan makes harder to
+obtain: after planning, every gap is a cluster wide enough that spin-up
+hides inside replay time. Before planning, a **wall-drift gap** — one of the
+few tens-of-ledgers ranges recorded while the retention wall moved — is
+almost pure spin-up and reads it off directly. The pilot got its 12m47s
+figure from a nine-ledger gap by luck of scheduling order.
+
+So those gaps pay twice: §2 requires replaying them because deferring one
+freezes a registration's coverage, and they are also the calibration
+instrument for everything else.
 
 The plan actually computed for the pilot's 1,285 contracts — event ledgers
 unioned with deployment ledgers (§3), clustered at 10k with 300 ledgers of
