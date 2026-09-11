@@ -214,8 +214,8 @@ can always be rebuilt from raw via `rederive` [P13].
   The gate has since been exercised across an actual change of engine —
   mainnet, core 28.0.0 to 28.0.1 — and the replays stayed byte-equivalent,
   which is the case the normalization of diagnostic events and change
-  ordering exists for. One observation on eight ledgers, not a proof, but
-  the case that had never been run.
+  ordering exists for. Two observations on eight ledgers each, not a proof,
+  but the case that had never been run.
   Replaying a deep gap linearly is measured in weeks; `SPARSE-HEAL.md`
   specifies how a heal replays only the stretches where a registered
   contract could have produced a row, splitting the gap into replayed and
