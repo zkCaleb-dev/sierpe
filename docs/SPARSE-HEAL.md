@@ -88,13 +88,29 @@ history. Sierpe's differentiator is that a range it cannot vouch for is
 stated and never implied; buying three days with an asterisk on that promise
 is the one trade this project should not make.
 
-The accepted cost is narrow: the continuous `indexedFromLedger` of a contract
-settles above the deepest desert, because the existing clamp handoff points a
-resolving gap's registrations at the deepest gap still open and a deferred gap
-qualifies. Rows healed below that desert are stored and queryable; the gap
-list says exactly what is missing. Teaching the API to express "covered except
-these declared holes" is a worthwhile follow-up and an `api-surface-change`;
-it is out of scope here and nothing in this spec depends on it.
+The accepted cost is narrow but it has a sharp edge, and the edge is an
+operational rule rather than a caveat.
+
+A clamped registration's declared frontier descends only while the gap it is
+clamped at is healing: each chunk lowers it, and when that gap resolves the
+handoff moves the registration to the nearest open gap below. **A deferred
+gap never resolves**, so the frontier stops at the first deferred gap below
+the wall and stays there — permanently, however much history heals further
+down. Rows below it are stored and queryable and the gap list says exactly
+what is missing, but `indexedFromLedger` does not move again.
+
+So **the gaps immediately below a registration's clamp must be planned as
+replay**, or its coverage never advances at all. The case to watch is the
+wall-drift gaps: the few tiny ranges recorded as the retention wall moved
+during a long walk sit directly under the clamp, are easy to dismiss as
+negligible — tens of ledgers — and deferring even one of them freezes the
+declared coverage of every contract in the batch. Their cost is a captive
+core spin-up each, which is the right price.
+
+Teaching the API to express "covered except these declared holes" would
+retire the whole edge. It is a worthwhile follow-up and an
+`api-surface-change`; it is out of scope here and nothing in this spec
+depends on it.
 
 ## 3. The hint is an input, never a dependency
 
